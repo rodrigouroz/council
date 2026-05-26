@@ -15,6 +15,8 @@ Use Council before presenting substantial artifacts. Skip it for trivial answers
 
 If Node or the helper is unavailable, follow the manual fallback in `references/council-workflow.md`. If Git worktrees are unavailable, the helper falls back to a temporary directory copy and discloses that in the report.
 
+Council is not an OS sandbox. Reviewer CLIs run as local processes, so do not pass absolute paths to the author's source checkout unless that exposure is intentional.
+
 ## Workflow
 
 1. Draft the artifact or implementation.

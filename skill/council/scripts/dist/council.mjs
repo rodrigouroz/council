@@ -226,7 +226,7 @@ async function copyFallback(request, reason) {
   const workspacePath = path2.join(tmpRoot, "repo");
   await cp(request.cwd, workspacePath, {
     recursive: true,
-    filter: (source) => !shouldExcludeCopyPath(source)
+    filter: (source) => source === request.cwd || !shouldExcludeCopyPath(source)
   });
   await copyArtifactIfNeeded(request.artifactPath, workspacePath);
   return {
@@ -243,7 +243,7 @@ async function copyFallback(request, reason) {
 }
 function shouldExcludeCopyPath(source) {
   const base = path2.basename(source);
-  return ![".git", "node_modules", ".next", "dist", "build", "coverage"].includes(base);
+  return [".git", "node_modules", ".next", "dist", "build", "coverage"].includes(base);
 }
 async function copyFilePreservingDirs(source, destination) {
   const sourceStat = await stat(source);
@@ -274,13 +274,16 @@ async function runReview(request) {
     nextRoundRecommended: false
   };
   const artifact = await readArtifact(request);
-  const diff = await readDiff(request);
+  const diff = await readReviewDiff(request);
   if (discovery.reviewers.length === 0) {
     report.harnessNotes.push("no reviewer agents available");
     return report;
   }
-  for (const reviewer of discovery.reviewers) {
-    const result = await runOneReviewer(reviewer, request, artifact, diff);
+  const reviewerResults = await Promise.all(
+    discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diff))
+  );
+  for (const [index, result] of reviewerResults.entries()) {
+    const reviewer = discovery.reviewers[index];
     report.reviewerResults.push(result);
     report.blockingFindings.push(...result.blockingFindings);
     report.suggestions.push(...result.suggestions);
@@ -327,17 +330,22 @@ function parseReviewerOutput(reviewer, output) {
     questions: [],
     pass: false
   };
+  let currentFinding;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
     const upper = line.toUpperCase();
     if (upper.startsWith("BLOCKER:")) {
-      result.blockingFindings.push(finding(reviewer, line.slice("BLOCKER:".length)));
+      currentFinding = pushFinding(result.blockingFindings, reviewer, line.slice("BLOCKER:".length));
     } else if (upper.startsWith("SUGGESTION:")) {
-      result.suggestions.push(finding(reviewer, line.slice("SUGGESTION:".length)));
+      currentFinding = pushFinding(result.suggestions, reviewer, line.slice("SUGGESTION:".length));
     } else if (upper.startsWith("QUESTION:")) {
-      result.questions.push(finding(reviewer, line.slice("QUESTION:".length)));
+      currentFinding = pushFinding(result.questions, reviewer, line.slice("QUESTION:".length));
     } else if (upper.startsWith("PASS:")) {
       result.pass = true;
+      currentFinding = void 0;
+    } else if (line && currentFinding) {
+      currentFinding.text = `${currentFinding.text}
+${rawLine}`;
     }
   }
   return result;
@@ -385,12 +393,13 @@ async function readArtifact(request) {
   if (!request.artifactPath) return "";
   return readFile2(request.artifactPath, "utf8");
 }
-async function readDiff(request) {
+async function readReviewDiff(request) {
+  if (!request.includeDiff) return "";
   try {
     const { stdout } = await runProcess("git", ["diff", "--binary", "HEAD", "--"], { cwd: request.cwd });
     return stdout;
   } catch {
-    return request.includeDiff ? "" : "";
+    return "";
   }
 }
 function artifactKind(request) {
@@ -404,6 +413,11 @@ function artifactLabel(request) {
 }
 function finding(reviewer, text) {
   return { reviewer, text: text.trim() };
+}
+function pushFinding(target, reviewer, text) {
+  const entry = finding(reviewer, text);
+  target.push(entry);
+  return entry;
 }
 
 // src/report.ts

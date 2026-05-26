@@ -14,7 +14,7 @@ Council replaces the heavier Camelot product direction. It keeps the useful idea
 - Provide a bundled Node.js helper that the skill can invoke without a runtime `npm install`.
 - Support review of specs, plans, code diffs, PR summaries, migrations, incident writeups, security-sensitive changes, and decision-driving analysis.
 - Let reviewer agents use tools as needed, including dependency installation, code search, test runs, builds, and local inspection.
-- Prevent reviewer activity from modifying the author's real working tree.
+- Reduce the risk of reviewer activity modifying the author's real working tree by running reviewers from disposable workspaces and disclosing harness limits.
 - Support iterative review loops with a hard safeguard limit.
 - Package the skill as a zip that can be uploaded or shared.
 - Keep setup and usage boring enough that agents actually use it.
@@ -32,13 +32,7 @@ Council replaces the heavier Camelot product direction. It keeps the useful idea
 
 ## Product Shape
 
-Council is a local project under:
-
-```text
-/Users/rodrigouroz/Projects/council
-```
-
-The first implementation is a skill folder with a bundled TypeScript helper:
+The first implementation is a repository containing a skill folder with a bundled TypeScript helper:
 
 ```text
 council/
@@ -114,7 +108,7 @@ Defaults:
 - Output defaults to Markdown.
 - `--json` emits JSON.
 
-The helper should avoid user-facing review modes such as `artifact-only`, `read-only`, or `verify`. Reviewers get a simple instruction: use the tools needed to review well, but do not intentionally modify source. The harness enforces source isolation.
+The helper should avoid user-facing review modes such as `artifact-only`, `read-only`, or `verify`. Reviewers get a simple instruction: use the tools needed to review well, but do not intentionally modify source. The harness isolates ordinary cwd-relative writes through disposable workspaces and reports mutations it observes.
 
 ## Reviewer Agents
 
@@ -146,9 +140,9 @@ claude --print --input-format stream-json --output-format stream-json --verbose 
 
 Reviewers may need to install modules, run tests, build code, generate temporary files, and inspect the repository. That is allowed.
 
-The invariant is:
+The operational invariant is:
 
-> A reviewer may mutate its disposable workspace, but it must not mutate the author's real working tree.
+> A reviewer may mutate its disposable workspace, and normal cwd-relative reviewer activity must not mutate the author's real working tree.
 
 For each reviewer and round, Council should create an isolated workspace. Preferred implementation:
 
@@ -166,6 +160,8 @@ For each reviewer and round, Council should create an isolated workspace. Prefer
 If a Git worktree is not possible, Council can fall back to copying the directory to a temp location, excluding obvious heavy/generated directories when safe. This fallback should be explicit in the report.
 
 Dependency installation is allowed inside disposable workspaces. Global package caches may still be used by package managers. That is acceptable for v1.
+
+Council is not an OS sandbox against malicious reviewers or reviewer CLIs with broad permissions. Review commands run as local processes, so prompts and artifacts should avoid absolute paths to the author's source checkout unless that exposure is intentional.
 
 ## Iteration Loop
 
@@ -197,6 +193,8 @@ Council should stop early when:
 - No reviewer agents are available.
 
 The helper should not auto-fix. It returns findings. The authoring agent performs edits and decides whether another round is warranted.
+
+The v1 helper is stateless across rounds. It exposes `--round`, `--max-rounds`, and `--change-summary`; the authoring agent decides whether "no meaningful change since previous review" means the loop should stop. Persistent round-state tracking is a future enhancement.
 
 ## Review Prompt Requirements
 
@@ -272,11 +270,11 @@ Council's safety model is isolation plus disclosure:
 
 - Reviewers run in disposable workspaces.
 - Reviewer changes are ignored.
-- The author's workspace is not modified.
+- Normal cwd-relative reviewer writes do not modify the author's workspace.
 - The report notes missing reviewers, failed invocations, setup failures, and reviewer workspace mutations.
 - A failed reviewer should not fail the whole Council run if at least one reviewer returns useful output.
 
-Council should not hide harness failures. A report with only one successful reviewer should say so clearly.
+Council should not hide harness failures or oversell its isolation boundary. A report with only one successful reviewer should say so clearly.
 
 ## Packaging And Distribution
 
@@ -298,6 +296,7 @@ GitHub Actions should:
 - Install pinned Node dependencies with `npm ci`.
 - Run tests.
 - Build the bundled helper.
+- Fail if the tracked bundled helper differs from a rebuild.
 - Package `council-skill.zip`.
 - Upload the zip as a workflow artifact for PRs and `main`.
 - Create a GitHub Release and attach the zip for tags matching `v*`.
@@ -316,6 +315,8 @@ Initial tests:
 - Allows reviewer writes inside the disposable workspace without touching the source checkout.
 - Detects reviewer workspace mutations and reports them.
 - Parses reviewer output into blocking findings, suggestions, questions, and pass status.
+- Preserves continuation lines attached to prefixed reviewer findings.
+- Exercises the directory-copy fallback path.
 - Emits Markdown and JSON reports.
 - Packages a zip containing the expected skill files and excluding `node_modules`.
 - Includes at least three skill-level evaluation prompts for real usage scenarios.

@@ -9,6 +9,7 @@
   "scripts": {
     "test": "node --test --import tsx test/*.test.ts",
     "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/council.mjs --banner:js='#!/usr/bin/env node'",
+    "check-dist": "npm run build && git diff --exit-code -- dist/council.mjs",
     "package": "npm run build && node tools/package-skill.mjs",
     "typecheck": "tsc --noEmit"
   },

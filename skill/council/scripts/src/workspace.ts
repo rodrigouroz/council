@@ -93,7 +93,7 @@ async function copyFallback(request: PrepareWorkspaceRequest, reason: string): P
   const workspacePath = path.join(tmpRoot, "repo");
   await cp(request.cwd, workspacePath, {
     recursive: true,
-    filter: (source) => !shouldExcludeCopyPath(source),
+    filter: (source) => source === request.cwd || !shouldExcludeCopyPath(source),
   });
   await copyArtifactIfNeeded(request.artifactPath, workspacePath);
   return {
@@ -111,7 +111,7 @@ async function copyFallback(request: PrepareWorkspaceRequest, reason: string): P
 
 function shouldExcludeCopyPath(source: string): boolean {
   const base = path.basename(source);
-  return ![".git", "node_modules", ".next", "dist", "build", "coverage"].includes(base);
+  return [".git", "node_modules", ".next", "dist", "build", "coverage"].includes(base);
 }
 
 async function copyFilePreservingDirs(source: string, destination: string): Promise<void> {

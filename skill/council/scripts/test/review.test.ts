@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildPrompt, parseReviewerOutput } from "../src/review.ts";
+import { buildPrompt, parseReviewerOutput, readReviewDiff } from "../src/review.ts";
 import { renderJson, renderMarkdown } from "../src/report.ts";
 
 test("parseReviewerOutput buckets findings", () => {
@@ -18,6 +18,30 @@ test("parseReviewerOutput buckets findings", () => {
   assert.equal(parsed.suggestions[0]?.text, "name the risk owner");
   assert.equal(parsed.questions[0]?.text, "who signs off?");
   assert.equal(parsed.pass, true);
+});
+
+test("parseReviewerOutput preserves continuation lines on findings", () => {
+  const parsed = parseReviewerOutput(
+    "claude",
+    [
+      "BLOCKER: missing rollback step",
+      "  Evidence: rollout.md has no rollback section",
+      "  File: rollout.md:12",
+      "",
+      "SUGGESTION: name the risk owner",
+      "Additional context should stay attached.",
+    ].join("\n"),
+  );
+
+  assert.equal(
+    parsed.blockingFindings[0]?.text,
+    "missing rollback step\n  Evidence: rollout.md has no rollback section\n  File: rollout.md:12",
+  );
+  assert.equal(parsed.suggestions[0]?.text, "name the risk owner\nAdditional context should stay attached.");
+});
+
+test("readReviewDiff only reads git diff when diff review is requested", async () => {
+  assert.equal(await readReviewDiff({ cwd: process.cwd(), includeDiff: false }), "");
 });
 
 test("buildPrompt includes review contract", () => {

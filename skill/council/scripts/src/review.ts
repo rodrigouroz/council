@@ -16,6 +16,11 @@ export interface PromptInput {
   changeSummary: string;
 }
 
+export interface DiffReadRequest {
+  cwd: string;
+  includeDiff: boolean;
+}
+
 export async function runReview(request: ReviewRequest): Promise<CouncilReport> {
   const discovery = discoverReviewers();
   const report: CouncilReport = {
@@ -32,14 +37,17 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
   };
 
   const artifact = await readArtifact(request);
-  const diff = await readDiff(request);
+  const diff = await readReviewDiff(request);
   if (discovery.reviewers.length === 0) {
     report.harnessNotes.push("no reviewer agents available");
     return report;
   }
 
-  for (const reviewer of discovery.reviewers) {
-    const result = await runOneReviewer(reviewer, request, artifact, diff);
+  const reviewerResults = await Promise.all(
+    discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diff)),
+  );
+  for (const [index, result] of reviewerResults.entries()) {
+    const reviewer = discovery.reviewers[index]!;
     report.reviewerResults.push(result);
     report.blockingFindings.push(...result.blockingFindings);
     report.suggestions.push(...result.suggestions);
@@ -89,17 +97,21 @@ export function parseReviewerOutput(reviewer: string, output: string): ReviewerR
     questions: [],
     pass: false,
   };
+  let currentFinding: Finding | undefined;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
     const upper = line.toUpperCase();
     if (upper.startsWith("BLOCKER:")) {
-      result.blockingFindings.push(finding(reviewer, line.slice("BLOCKER:".length)));
+      currentFinding = pushFinding(result.blockingFindings, reviewer, line.slice("BLOCKER:".length));
     } else if (upper.startsWith("SUGGESTION:")) {
-      result.suggestions.push(finding(reviewer, line.slice("SUGGESTION:".length)));
+      currentFinding = pushFinding(result.suggestions, reviewer, line.slice("SUGGESTION:".length));
     } else if (upper.startsWith("QUESTION:")) {
-      result.questions.push(finding(reviewer, line.slice("QUESTION:".length)));
+      currentFinding = pushFinding(result.questions, reviewer, line.slice("QUESTION:".length));
     } else if (upper.startsWith("PASS:")) {
       result.pass = true;
+      currentFinding = undefined;
+    } else if (line && currentFinding) {
+      currentFinding.text = `${currentFinding.text}\n${rawLine}`;
     }
   }
   return result;
@@ -155,12 +167,13 @@ async function readArtifact(request: ReviewRequest): Promise<string> {
   return readFile(request.artifactPath, "utf8");
 }
 
-async function readDiff(request: ReviewRequest): Promise<string> {
+export async function readReviewDiff(request: DiffReadRequest): Promise<string> {
+  if (!request.includeDiff) return "";
   try {
     const { stdout } = await runProcess("git", ["diff", "--binary", "HEAD", "--"], { cwd: request.cwd });
     return stdout;
   } catch {
-    return request.includeDiff ? "" : "";
+    return "";
   }
 }
 
@@ -177,4 +190,10 @@ function artifactLabel(request: ReviewRequest): string {
 
 function finding(reviewer: string, text: string): Finding {
   return { reviewer, text: text.trim() };
+}
+
+function pushFinding(target: Finding[], reviewer: string, text: string): Finding {
+  const entry = finding(reviewer, text);
+  target.push(entry);
+  return entry;
 }

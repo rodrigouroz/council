@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -59,6 +59,22 @@ test("prepared workspace reports reviewer mutations without touching source", as
     const status = await prepared.status();
     assert.match(status, /M tracked.txt/);
     assert.equal(await readFile(path.join(repo, "tracked.txt"), "utf8"), "base\n");
+  } finally {
+    await prepared.cleanup();
+  }
+});
+
+test("prepareWorkspace copy fallback copies source files and excludes generated directories", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "council-copy-source-"));
+  await writeFile(path.join(dir, "source.txt"), "source\n");
+  await mkdir(path.join(dir, "node_modules", "pkg"), { recursive: true });
+  await writeFile(path.join(dir, "node_modules", "pkg", "ignored.txt"), "ignored\n");
+
+  const prepared = await prepareWorkspace({ cwd: dir, reviewerId: "codex" });
+  try {
+    assert.equal(prepared.fallback, true);
+    assert.equal(await readFile(path.join(prepared.path, "source.txt"), "utf8"), "source\n");
+    await assert.rejects(() => readFile(path.join(prepared.path, "node_modules", "pkg", "ignored.txt"), "utf8"));
   } finally {
     await prepared.cleanup();
   }

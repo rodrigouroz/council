@@ -2,7 +2,7 @@
 
 Portable agent peer review for substantial AI-generated work.
 
-Council is a Codex/Claude-compatible skill that asks other local agents to review specs, plans, diffs, incident writeups, migrations, and other decision-driving artifacts before the authoring agent presents final work. Reviewers run in disposable workspaces, return structured findings, and never edit the author's real working tree.
+Council is a Codex/Claude-compatible skill that asks other local agents to review specs, plans, diffs, incident writeups, migrations, and other decision-driving artifacts before the authoring agent presents final work. Reviewers run from disposable workspaces so cwd-relative edits are discarded, return structured findings, and leave the authoring agent responsible for final judgment.
 
 [![Package Council Skill](https://github.com/rodrigouroz/council/actions/workflows/package-skill.yml/badge.svg)](https://github.com/rodrigouroz/council/actions/workflows/package-skill.yml)
 
@@ -39,6 +39,8 @@ Council is intentionally smaller than Camelot: no custom UI, no event hub, no pe
   - `claude`
 
 If Git worktrees are unavailable, Council falls back to a temporary directory copy and discloses that fallback in the report. If Node is unavailable, the skill includes manual fallback instructions.
+
+Council is not an OS sandbox. Reviewer CLIs still run as local processes with their own permission modes, so avoid putting absolute paths to the author's source checkout in prompts or artifacts when reviewer tools are broadly permitted.
 
 ## Usage From Source
 
@@ -98,7 +100,7 @@ Run verification:
 ```bash
 npm run typecheck
 npm test
-npm run build
+npm run check-dist
 ```
 
 Package the skill zip:
@@ -123,6 +125,8 @@ GitHub Actions runs on pull requests, pushes to `main`, and tags matching `v*`.
 
 - Pull requests and `main`: typecheck, test, build, package, and upload `council-skill.zip` as a workflow artifact.
 - Version tags such as `v0.1.0`: create a GitHub Release and attach `council-skill.zip`.
+
+CI also rebuilds `skill/council/scripts/dist/council.mjs` and fails if the tracked bundle drifts from source.
 
 ## Repository Layout
 

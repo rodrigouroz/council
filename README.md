@@ -189,7 +189,6 @@ CI also rebuilds `skill/council/scripts/dist/council.mjs` and fails if the track
 │       ├── package.json
 │       ├── package-lock.json
 │       └── tsconfig.json
-└── docs/superpowers/plans/
 ```
 
 ## GitHub Description

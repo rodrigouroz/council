@@ -1,10 +1,10 @@
-import { cwd as currentWorkingDirectory } from "node:process";
+import { cwd as currentWorkingDirectory, env as processEnv } from "node:process";
 
-import type { Format, ReviewRequest } from "./types.ts";
+import type { Format, ReviewerId, ReviewRequest } from "./types.ts";
 import { runReview } from "./review.ts";
 import { renderJson, renderMarkdown } from "./report.ts";
 
-export function parseArgs(args: string[]): ReviewRequest {
+export function parseArgs(args: string[], env: NodeJS.ProcessEnv = processEnv): ReviewRequest {
   const [command, ...rest] = args;
   if (command !== "review") {
     throw new Error("usage: council review --artifact PATH --cwd PATH");
@@ -32,6 +32,9 @@ export function parseArgs(args: string[]): ReviewRequest {
       case "--diff":
         request.includeDiff = true;
         break;
+      case "--author":
+        request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");
+        break;
       case "--max-rounds":
         request.maxRounds = parsePositiveInteger(requireValue(rest, ++i, "--max-rounds"), "--max-rounds");
         break;
@@ -55,6 +58,7 @@ export function parseArgs(args: string[]): ReviewRequest {
     }
   }
 
+  request.author ??= parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
   validateRequest(request);
   return request;
 }
@@ -86,6 +90,17 @@ function parseFormat(value: string): Format {
     return value;
   }
   throw new Error("--format must be markdown or json");
+}
+
+function parseAuthor(value: string | undefined, source: string): ReviewerId | undefined {
+  const normalized = value?.trim();
+  if (normalized === undefined || normalized === "") {
+    return undefined;
+  }
+  if (normalized === "codex" || normalized === "claude") {
+    return normalized;
+  }
+  throw new Error(`${source} must be codex or claude`);
 }
 
 function validateRequest(request: ReviewRequest): void {

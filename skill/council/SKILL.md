@@ -23,22 +23,25 @@ Council is not an OS sandbox. Reviewer CLIs run as local processes, so do not pa
 2. Run the bundled helper:
 
 ```bash
-node skill/council/scripts/dist/council.mjs review --artifact /path/to/artifact.md --cwd /path/to/repo
+node skill/council/scripts/dist/council.mjs review --artifact /path/to/artifact.md --cwd /path/to/repo --author <codex-or-claude>
 ```
+
+Replace `<codex-or-claude>` with `codex` when running from Codex and `claude` when running from Claude Code. Council skips the matching reviewer so an agent does not review itself. You can also set `COUNCIL_AUTHOR_AGENT=codex` or `COUNCIL_AUTHOR_AGENT=claude` instead of passing the flag; an explicit `--author` flag wins over the environment variable.
 
 For code diffs:
 
 ```bash
-node skill/council/scripts/dist/council.mjs review --diff --cwd /path/to/repo
+node skill/council/scripts/dist/council.mjs review --diff --cwd /path/to/repo --author <codex-or-claude>
 ```
 
 3. Read the report. Treat `BLOCKER` and `QUESTION` items as needing a decision before final presentation.
+   - If the result says `no reviewer agents available`, treat the artifact as unreviewed: install the opposite reviewer CLI, fix the author value, or use the manual fallback in `references/council-workflow.md`.
 4. Accept valid findings and revise the artifact or implementation yourself.
 5. Reject invalid findings explicitly with a short reason.
 6. Re-run Council after meaningful changes while the round limit allows it:
 
 ```bash
-node skill/council/scripts/dist/council.mjs review --artifact /path/to/artifact.md --cwd /path/to/repo --round 2 --max-rounds 3 --change-summary "Addressed rollback and test coverage findings"
+node skill/council/scripts/dist/council.mjs review --artifact /path/to/artifact.md --cwd /path/to/repo --author <codex-or-claude> --round 2 --max-rounds 3 --change-summary "Addressed rollback and test coverage findings"
 ```
 
 7. Present the final answer with accepted findings, rejected findings, and remaining risks.

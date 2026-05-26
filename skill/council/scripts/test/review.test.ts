@@ -106,5 +106,28 @@ test("reports render markdown and json", () => {
 
   const json = JSON.parse(renderJson(report));
   assert.equal(json.round, 1);
+  assert.equal(json.result, "next round recommended");
   assert.equal(json.nextRoundRecommended, true);
+});
+
+test("reports with no reviewers do not render as clean passes", () => {
+  const report = {
+    round: 1,
+    maxRounds: 3,
+    artifact: "git diff",
+    reviewers: [],
+    blockingFindings: [],
+    suggestions: [],
+    questions: [],
+    harnessNotes: ["no reviewer agents available"],
+    reviewerResults: [],
+    nextRoundRecommended: false,
+  };
+
+  const markdown = renderMarkdown(report);
+  assert.match(markdown, /- reviewers: none/);
+  assert.match(markdown, /- result: no reviewer agents available/);
+
+  const json = JSON.parse(renderJson(report));
+  assert.equal(json.result, "no reviewer agents available");
 });

@@ -14,3 +14,7 @@ skill/council/dist/
 # Keep the bundled runtime helper in source for skill zip auditability.
 !skill/council/scripts/dist/
 !skill/council/scripts/dist/council.mjs
+
+# Local planning artifacts; keep specs and implementation plans out of git.
+docs/superpowers/specs/
+docs/superpowers/plans/

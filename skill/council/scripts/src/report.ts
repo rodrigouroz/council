@@ -8,7 +8,7 @@ export function renderMarkdown(report: CouncilReport): string {
     `- round: ${report.round} of ${report.maxRounds}`,
     `- artifact: ${report.artifact}`,
     `- reviewers: ${report.reviewers.length > 0 ? report.reviewers.join(", ") : "none"}`,
-    `- result: ${report.nextRoundRecommended ? "next round recommended" : "no blocking findings"}`,
+    `- result: ${reportResult(report)}`,
     "",
     ...findingSection("Blocking Findings", report.blockingFindings),
     "",
@@ -31,7 +31,7 @@ export function renderMarkdown(report: CouncilReport): string {
 }
 
 export function renderJson(report: CouncilReport): string {
-  return `${JSON.stringify(report, null, 2)}\n`;
+  return `${JSON.stringify({ ...report, result: reportResult(report) }, null, 2)}\n`;
 }
 
 function findingSection(title: string, findings: Finding[]): string[] {
@@ -39,4 +39,11 @@ function findingSection(title: string, findings: Finding[]): string[] {
     return [`## ${title}`, "- None."];
   }
   return [`## ${title}`, ...findings.map((finding) => `- ${finding.reviewer}: ${finding.text}`)];
+}
+
+function reportResult(report: CouncilReport): string {
+  if (report.reviewers.length === 0) {
+    return "no reviewer agents available";
+  }
+  return report.nextRoundRecommended ? "next round recommended" : "no blocking findings";
 }

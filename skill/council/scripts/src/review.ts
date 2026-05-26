@@ -22,7 +22,7 @@ export interface DiffReadRequest {
 }
 
 export async function runReview(request: ReviewRequest): Promise<CouncilReport> {
-  const discovery = discoverReviewers();
+  const discovery = discoverReviewers(process.env, request.author);
   const report: CouncilReport = {
     round: request.round,
     maxRounds: request.maxRounds,

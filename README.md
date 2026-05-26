@@ -22,7 +22,7 @@ The helper is bundled so users do not need to run `npm install` at skill runtime
 ## How It Works
 
 1. The authoring agent drafts an artifact or implementation.
-2. Council creates an isolated workspace for each available reviewer.
+2. Council creates an isolated workspace for each available reviewer except the authoring agent.
 3. Council invokes local reviewer CLIs, currently `codex` and `claude`.
 4. Reviewers inspect the artifact, repository, and diff as needed.
 5. Council parses reviewer output into `BLOCKER`, `SUGGESTION`, `QUESTION`, and `PASS`.
@@ -42,6 +42,8 @@ If Git worktrees are unavailable, Council falls back to a temporary directory co
 
 Council is not an OS sandbox. Reviewer CLIs still run as local processes with their own permission modes, so avoid putting absolute paths to the author's source checkout in prompts or artifacts when reviewer tools are broadly permitted.
 
+If a report says `no reviewer agents available`, treat the artifact as unreviewed. Install the opposite reviewer CLI, correct the author value, or use the manual fallback instructions in `references/council-workflow.md`.
+
 ## Usage From Source
 
 Review an artifact:
@@ -49,15 +51,19 @@ Review an artifact:
 ```bash
 node skill/council/scripts/dist/council.mjs review \
   --artifact /path/to/artifact.md \
-  --cwd /path/to/repo
+  --cwd /path/to/repo \
+  --author <codex-or-claude>
 ```
+
+Replace `<codex-or-claude>` with `codex` when running from Codex and `claude` when running from Claude Code. Council skips the matching reviewer so an agent does not review itself. If you prefer environment configuration, set `COUNCIL_AUTHOR_AGENT=codex` or `COUNCIL_AUTHOR_AGENT=claude`; an explicit `--author` flag wins over the environment variable.
 
 Review the current diff:
 
 ```bash
 node skill/council/scripts/dist/council.mjs review \
   --diff \
-  --cwd /path/to/repo
+  --cwd /path/to/repo \
+  --author <codex-or-claude>
 ```
 
 Run a follow-up round:
@@ -66,6 +72,7 @@ Run a follow-up round:
 node skill/council/scripts/dist/council.mjs review \
   --artifact /path/to/artifact.md \
   --cwd /path/to/repo \
+  --author <codex-or-claude> \
   --round 2 \
   --max-rounds 3 \
   --change-summary "Addressed rollback and test coverage findings"
@@ -77,6 +84,7 @@ Emit JSON:
 node skill/council/scripts/dist/council.mjs review \
   --artifact /path/to/artifact.md \
   --cwd /path/to/repo \
+  --author <codex-or-claude> \
   --json
 ```
 

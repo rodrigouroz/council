@@ -24,6 +24,28 @@ test("discoverReviewers finds supported reviewers on PATH", async () => {
   assert.deepEqual(found.warnings, []);
 });
 
+test("discoverReviewers skips codex when codex is the authoring agent", async () => {
+  const dir = await fakeBin("codex", "#!/usr/bin/env node\nprocess.exit(0)\n");
+  await writeFile(path.join(dir, "claude"), "#!/usr/bin/env node\nprocess.exit(0)\n", { mode: 0o755 });
+  const found = discoverReviewers({ PATH: dir }, "codex");
+  assert.deepEqual(
+    found.reviewers.map((reviewer) => reviewer.id),
+    ["claude"],
+  );
+  assert.deepEqual(found.warnings, ["reviewer codex skipped: matches authoring agent"]);
+});
+
+test("discoverReviewers skips claude when claude is the authoring agent", async () => {
+  const dir = await fakeBin("codex", "#!/usr/bin/env node\nprocess.exit(0)\n");
+  await writeFile(path.join(dir, "claude"), "#!/usr/bin/env node\nprocess.exit(0)\n", { mode: 0o755 });
+  const found = discoverReviewers({ PATH: dir }, "claude");
+  assert.deepEqual(
+    found.reviewers.map((reviewer) => reviewer.id),
+    ["codex"],
+  );
+  assert.deepEqual(found.warnings, ["reviewer claude skipped: matches authoring agent"]);
+});
+
 test("discoverReviewers warns for missing reviewers", () => {
   const found = discoverReviewers({ PATH: "" });
   assert.equal(found.reviewers.length, 0);

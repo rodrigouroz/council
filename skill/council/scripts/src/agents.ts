@@ -14,10 +14,14 @@ export interface RunReviewerRequest {
   prompt: string;
 }
 
-export function discoverReviewers(env: NodeJS.ProcessEnv = process.env): Discovery {
+export function discoverReviewers(env: NodeJS.ProcessEnv = process.env, author?: ReviewerId): Discovery {
   const reviewers: Reviewer[] = [];
   const warnings: string[] = [];
   for (const candidate of supportedReviewers) {
+    if (candidate.id === author) {
+      warnings.push(`reviewer ${candidate.id} skipped: matches authoring agent`);
+      continue;
+    }
     const executable = findExecutable(candidate.executable, env);
     if (!executable) {
       warnings.push(`reviewer ${candidate.id} skipped: executable "${candidate.executable}" not found on PATH`);

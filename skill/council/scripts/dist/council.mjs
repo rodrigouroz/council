@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/cli.ts
-import { cwd as currentWorkingDirectory } from "node:process";
+import { cwd as currentWorkingDirectory, env as processEnv } from "node:process";
 
 // src/review.ts
 import { readFile as readFile2 } from "node:fs/promises";
@@ -51,10 +51,14 @@ var supportedReviewers = [
   { id: "codex", executable: "codex" },
   { id: "claude", executable: "claude" }
 ];
-function discoverReviewers(env = process.env) {
+function discoverReviewers(env = process.env, author) {
   const reviewers = [];
   const warnings = [];
   for (const candidate of supportedReviewers) {
+    if (candidate.id === author) {
+      warnings.push(`reviewer ${candidate.id} skipped: matches authoring agent`);
+      continue;
+    }
     const executable = findExecutable(candidate.executable, env);
     if (!executable) {
       warnings.push(`reviewer ${candidate.id} skipped: executable "${candidate.executable}" not found on PATH`);
@@ -260,7 +264,7 @@ function safeSegment(input) {
 
 // src/review.ts
 async function runReview(request) {
-  const discovery = discoverReviewers();
+  const discovery = discoverReviewers(process.env, request.author);
   const report = {
     round: request.round,
     maxRounds: request.maxRounds,
@@ -431,7 +435,7 @@ function renderMarkdown(report) {
     `- round: ${report.round} of ${report.maxRounds}`,
     `- artifact: ${report.artifact}`,
     `- reviewers: ${report.reviewers.length > 0 ? report.reviewers.join(", ") : "none"}`,
-    `- result: ${report.nextRoundRecommended ? "next round recommended" : "no blocking findings"}`,
+    `- result: ${reportResult(report)}`,
     "",
     ...findingSection("Blocking Findings", report.blockingFindings),
     "",
@@ -453,7 +457,7 @@ function renderMarkdown(report) {
   return `${lines.join("\n")}`;
 }
 function renderJson(report) {
-  return `${JSON.stringify(report, null, 2)}
+  return `${JSON.stringify({ ...report, result: reportResult(report) }, null, 2)}
 `;
 }
 function findingSection(title, findings) {
@@ -462,9 +466,15 @@ function findingSection(title, findings) {
   }
   return [`## ${title}`, ...findings.map((finding2) => `- ${finding2.reviewer}: ${finding2.text}`)];
 }
+function reportResult(report) {
+  if (report.reviewers.length === 0) {
+    return "no reviewer agents available";
+  }
+  return report.nextRoundRecommended ? "next round recommended" : "no blocking findings";
+}
 
 // src/cli.ts
-function parseArgs(args) {
+function parseArgs(args, env = processEnv) {
   const [command, ...rest] = args;
   if (command !== "review") {
     throw new Error("usage: council review --artifact PATH --cwd PATH");
@@ -490,6 +500,9 @@ function parseArgs(args) {
       case "--diff":
         request.includeDiff = true;
         break;
+      case "--author":
+        request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");
+        break;
       case "--max-rounds":
         request.maxRounds = parsePositiveInteger(requireValue(rest, ++i, "--max-rounds"), "--max-rounds");
         break;
@@ -512,6 +525,7 @@ function parseArgs(args) {
         throw new Error(`unexpected positional argument: ${arg}`);
     }
   }
+  request.author ??= parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
   validateRequest(request);
   return request;
 }
@@ -539,6 +553,16 @@ function parseFormat(value) {
     return value;
   }
   throw new Error("--format must be markdown or json");
+}
+function parseAuthor(value, source) {
+  const normalized = value?.trim();
+  if (normalized === void 0 || normalized === "") {
+    return void 0;
+  }
+  if (normalized === "codex" || normalized === "claude") {
+    return normalized;
+  }
+  throw new Error(`${source} must be codex or claude`);
 }
 function validateRequest(request) {
   if (!request.artifactPath && !request.includeDiff) {

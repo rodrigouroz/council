@@ -104,9 +104,13 @@ Defaults:
 - `--cwd` defaults to the current directory.
 - `--max-rounds` defaults to `3`.
 - `--round` defaults to `1`.
-- Reviewers default to every available supported agent.
+- `--author` is optional and accepts `codex` or `claude`; if omitted, the helper reads `COUNCIL_AUTHOR_AGENT`.
+- If both are set, `--author` takes precedence over `COUNCIL_AUTHOR_AGENT`.
+- When an author is known, reviewers default to every available supported agent except the authoring agent.
+- When no author is known, reviewers default to every available supported agent.
 - Output defaults to Markdown.
 - `--json` emits JSON.
+- Report `result` values are `no blocking findings`, `next round recommended`, and `no reviewer agents available`.
 
 The helper should avoid user-facing review modes such as `artifact-only`, `read-only`, or `verify`. Reviewers get a simple instruction: use the tools needed to review well, but do not intentionally modify source. The harness isolates ordinary cwd-relative writes through disposable workspaces and reports mutations it observes.
 
@@ -124,6 +128,7 @@ Future reviewer:
 Discovery should be simple:
 
 - Look for agent executables on `PATH`.
+- Skip the reviewer matching `--author` or `COUNCIL_AUTHOR_AGENT` with a visible warning.
 - Skip missing agents with a visible warning.
 - Allow explicit reviewer selection later, but default to all available reviewers.
 
@@ -254,6 +259,7 @@ JSON output should contain the same data shape:
   "maxRounds": 3,
   "artifact": "...",
   "reviewers": [],
+  "result": "no blocking findings | next round recommended | no reviewer agents available",
   "blockingFindings": [],
   "suggestions": [],
   "questions": [],
@@ -263,6 +269,8 @@ JSON output should contain the same data shape:
 ```
 
 The Markdown report is for agents and humans. JSON is for future automation.
+
+A report with `reviewers: []` or `result: "no reviewer agents available"` is not a peer-reviewed pass. The authoring agent should install or enable the opposite reviewer CLI, correct the author value, or use manual fallback review.
 
 ## Safety Model
 

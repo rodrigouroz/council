@@ -82,7 +82,7 @@ node skill/council/scripts/dist/council.mjs review \
 
 ## Installing The Skill
 
-Download `council-skill.zip` from a GitHub Release and upload or install it through your skill library. The zip root contains the `council/` skill folder.
+Download `council-skill.zip` from a GitHub Release and upload or install it through your skill library. The zip root contains the `council/` skill folder, which can be installed into Codex, Claude Code, or both.
 
 For a local build without GitHub Actions, run:
 
@@ -96,7 +96,20 @@ That validates the helper and writes:
 skill/council/dist/council-skill.zip
 ```
 
-To install the generated zip into a local Codex skill directory:
+To install the generated zip into both local skill directories:
+
+```bash
+./scripts/local-release.sh --install-both
+```
+
+That installs to:
+
+```text
+${CODEX_HOME:-$HOME/.codex}/skills/council
+$HOME/.claude/skills/council
+```
+
+To install manually into Codex:
 
 ```bash
 SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
@@ -105,13 +118,25 @@ rm -rf "$SKILLS_DIR/council"
 unzip -q skill/council/dist/council-skill.zip -d "$SKILLS_DIR"
 ```
 
-Or build and install in one step:
+To install manually into Claude Code:
 
 ```bash
-./scripts/local-release.sh --install-local
+SKILLS_DIR="$HOME/.claude/skills"
+mkdir -p "$SKILLS_DIR"
+rm -rf "$SKILLS_DIR/council"
+unzip -q skill/council/dist/council-skill.zip -d "$SKILLS_DIR"
 ```
 
-After installing, start a fresh Codex session or reload skills, then ask for a Council review of a real spec, plan, or diff.
+Or build and install for one target:
+
+```bash
+./scripts/local-release.sh --install-codex
+./scripts/local-release.sh --install-claude
+```
+
+`./scripts/local-release.sh --install-local` remains supported as a backward-compatible alias for `--install-codex`.
+
+After installing, start a fresh Codex or Claude Code session or reload skills, then ask for a Council review of a real spec, plan, or diff.
 
 ## Development
 

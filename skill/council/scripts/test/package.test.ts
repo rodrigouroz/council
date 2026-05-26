@@ -30,6 +30,9 @@ test("repository documents local release and external install flow", () => {
     "npm run check-dist",
     "npm run package",
     "--install-local",
+    "--install-codex",
+    "--install-claude",
+    "--install-both",
     "git status --porcelain",
     "council-skill.zip",
   ]) {
@@ -39,5 +42,7 @@ test("repository documents local release and external install flow", () => {
   const readme = readFileSync(path.join(repoRoot, "README.md"), "utf8");
   assert.match(readme, /scripts\/local-release\.sh/);
   assert.match(readme, /\$\{CODEX_HOME:-\$HOME\/\.codex\}\/skills/);
+  assert.match(readme, /\$HOME\/\.claude\/skills/);
+  assert.match(readme, /--install-both/);
   assert.match(readme, /unzip/);
 });

@@ -3,24 +3,40 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/local-release.sh [--install-local] [--tag vX.Y.Z]
+Usage: scripts/local-release.sh [--install-local|--install-codex|--install-claude|--install-both] [--tag vX.Y.Z]
 
 Build and validate the Council skill zip locally.
 
 Options:
-  --install-local  Install the generated zip into ${CODEX_HOME:-$HOME/.codex}/skills.
-  --tag TAG        Create or update a GitHub Release for TAG with council-skill.zip.
-  -h, --help       Show this help text.
+  --install-local   Install the generated zip into ${CODEX_HOME:-$HOME/.codex}/skills.
+                    Backward-compatible alias for --install-codex.
+  --install-codex   Install the generated zip into ${CODEX_HOME:-$HOME/.codex}/skills.
+  --install-claude  Install the generated zip into $HOME/.claude/skills.
+  --install-both    Install the generated zip into both Codex and Claude Code skill directories.
+  --tag TAG         Create or update a GitHub Release for TAG with council-skill.zip.
+  -h, --help        Show this help text.
 USAGE
 }
 
-install_local=false
+install_targets=()
 release_tag=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --install-local)
-      install_local=true
+      install_targets+=("codex")
+      shift
+      ;;
+    --install-codex)
+      install_targets+=("codex")
+      shift
+      ;;
+    --install-claude)
+      install_targets+=("claude")
+      shift
+      ;;
+    --install-both)
+      install_targets+=("codex" "claude")
       shift
       ;;
     --tag)
@@ -62,12 +78,40 @@ fi
 echo
 echo "Built $zip_path"
 
-if [[ "$install_local" == true ]]; then
-  skills_dir="${CODEX_HOME:-$HOME/.codex}/skills"
-  mkdir -p "$skills_dir"
-  rm -rf "$skills_dir/council"
-  unzip -q "$zip_path" -d "$skills_dir"
-  echo "Installed Council skill to $skills_dir/council"
+if [[ "${#install_targets[@]}" -gt 0 ]]; then
+  deduped_targets=()
+  for target in "${install_targets[@]}"; do
+    already_seen=false
+    for existing in "${deduped_targets[@]}"; do
+      if [[ "$existing" == "$target" ]]; then
+        already_seen=true
+        break
+      fi
+    done
+    if [[ "$already_seen" == false ]]; then
+      deduped_targets+=("$target")
+    fi
+  done
+
+  for target in "${deduped_targets[@]}"; do
+    case "$target" in
+      codex)
+        skills_dir="${CODEX_HOME:-$HOME/.codex}/skills"
+        ;;
+      claude)
+        skills_dir="$HOME/.claude/skills"
+        ;;
+      *)
+        echo "error: unsupported install target: $target" >&2
+        exit 2
+        ;;
+    esac
+
+    mkdir -p "$skills_dir"
+    rm -rf "$skills_dir/council"
+    unzip -q "$zip_path" -d "$skills_dir"
+    echo "Installed Council skill to $skills_dir/council"
+  done
 fi
 
 if [[ -n "$release_tag" ]]; then
@@ -96,12 +140,18 @@ if [[ -n "$release_tag" ]]; then
   echo "Uploaded $zip_path to GitHub Release $release_tag"
 fi
 
-if [[ "$install_local" == false && -z "$release_tag" ]]; then
+if [[ "${#install_targets[@]}" -eq 0 && -z "$release_tag" ]]; then
   cat <<EOF
 
 Next options:
-  Install locally:
-    scripts/local-release.sh --install-local
+  Install locally for both Codex and Claude Code:
+    scripts/local-release.sh --install-both
+
+  Install locally for Codex only:
+    scripts/local-release.sh --install-codex
+
+  Install locally for Claude Code only:
+    scripts/local-release.sh --install-claude
 
   Upload a GitHub Release asset:
     scripts/local-release.sh --tag v0.1.0

@@ -84,7 +84,34 @@ node skill/council/scripts/dist/council.mjs review \
 
 Download `council-skill.zip` from a GitHub Release and upload or install it through your skill library. The zip root contains the `council/` skill folder.
 
-For unreleased builds, GitHub Actions uploads `council-skill.zip` as a workflow artifact on pull requests and pushes to `main`.
+For a local build without GitHub Actions, run:
+
+```bash
+./scripts/local-release.sh
+```
+
+That validates the helper and writes:
+
+```text
+skill/council/dist/council-skill.zip
+```
+
+To install the generated zip into a local Codex skill directory:
+
+```bash
+SKILLS_DIR="${CODEX_HOME:-$HOME/.codex}/skills"
+mkdir -p "$SKILLS_DIR"
+rm -rf "$SKILLS_DIR/council"
+unzip -q skill/council/dist/council-skill.zip -d "$SKILLS_DIR"
+```
+
+Or build and install in one step:
+
+```bash
+./scripts/local-release.sh --install-local
+```
+
+After installing, start a fresh Codex session or reload skills, then ask for a Council review of a real spec, plan, or diff.
 
 ## Development
 
@@ -106,10 +133,10 @@ npm run check-dist
 Package the skill zip:
 
 ```bash
-npm run package
+./scripts/local-release.sh
 ```
 
-The package command writes:
+The local release command runs `npm ci`, typecheck, tests, bundle drift check, and packaging. It writes:
 
 ```text
 skill/council/dist/council-skill.zip
@@ -121,7 +148,21 @@ Skill-level evaluation scenarios live in `skill/council/evals/`. Use them when c
 
 ## Release Flow
 
-GitHub Actions runs on pull requests, pushes to `main`, and tags matching `v*`.
+The local release script mirrors the GitHub Actions job for environments where hosted Actions are unavailable:
+
+```bash
+./scripts/local-release.sh
+```
+
+To publish the zip as a GitHub Release asset from your machine:
+
+```bash
+./scripts/local-release.sh --tag v0.1.0
+```
+
+That command creates the tag if needed, pushes it, and creates or updates the release asset with `skill/council/dist/council-skill.zip`. It requires the GitHub CLI (`gh`) to be authenticated.
+
+GitHub Actions can still run on pull requests, pushes to `main`, and tags matching `v*` when account Actions capacity is available.
 
 - Pull requests and `main`: typecheck, test, build, package, and upload `council-skill.zip` as a workflow artifact.
 - Version tags such as `v0.1.0`: create a GitHub Release and attach `council-skill.zip`.
@@ -134,6 +175,7 @@ CI also rebuilds `skill/council/scripts/dist/council.mjs` and fails if the track
 .
 ├── SPEC.md
 ├── .github/workflows/package-skill.yml
+├── scripts/local-release.sh
 ├── skill/council/
 │   ├── SKILL.md
 │   ├── agents/openai.yaml

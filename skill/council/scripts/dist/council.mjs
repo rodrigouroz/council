@@ -343,6 +343,8 @@ function parseReviewerOutput(reviewer, output) {
     } else if (upper.startsWith("PASS:")) {
       result.pass = true;
       currentFinding = void 0;
+    } else if (!line) {
+      currentFinding = void 0;
     } else if (line && currentFinding) {
       currentFinding.text = `${currentFinding.text}
 ${rawLine}`;

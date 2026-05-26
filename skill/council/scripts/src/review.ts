@@ -110,6 +110,8 @@ export function parseReviewerOutput(reviewer: string, output: string): ReviewerR
     } else if (upper.startsWith("PASS:")) {
       result.pass = true;
       currentFinding = undefined;
+    } else if (!line) {
+      currentFinding = undefined;
     } else if (line && currentFinding) {
       currentFinding.text = `${currentFinding.text}\n${rawLine}`;
     }

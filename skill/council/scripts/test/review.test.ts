@@ -40,6 +40,22 @@ test("parseReviewerOutput preserves continuation lines on findings", () => {
   assert.equal(parsed.suggestions[0]?.text, "name the risk owner\nAdditional context should stay attached.");
 });
 
+test("parseReviewerOutput resets finding continuation on blank lines", () => {
+  const parsed = parseReviewerOutput(
+    "codex",
+    [
+      "BLOCKER: missing rollback step",
+      "Evidence: rollout.md has no rollback section",
+      "",
+      "Random paragraph outside any finding.",
+      "SUGGESTION: name the risk owner",
+    ].join("\n"),
+  );
+
+  assert.equal(parsed.blockingFindings[0]?.text, "missing rollback step\nEvidence: rollout.md has no rollback section");
+  assert.equal(parsed.suggestions[0]?.text, "name the risk owner");
+});
+
 test("readReviewDiff only reads git diff when diff review is requested", async () => {
   assert.equal(await readReviewDiff({ cwd: process.cwd(), includeDiff: false }), "");
 });

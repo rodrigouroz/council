@@ -1,0 +1,12 @@
+node_modules/
+.DS_Store
+.vscode/
+coverage/
+.cache/
+
+# Release/package outputs are produced by CI.
+skill/council/dist/
+
+# Keep the bundled runtime helper in source for skill zip auditability.
+!skill/council/scripts/dist/
+!skill/council/scripts/dist/council.mjs

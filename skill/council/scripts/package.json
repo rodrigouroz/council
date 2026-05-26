@@ -1,0 +1,22 @@
+{
+  "name": "@council/skill-helper",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test --import tsx test/*.test.ts",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/council.mjs --banner:js='#!/usr/bin/env node'",
+    "package": "npm run build && node tools/package-skill.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "yazl": "^3.3.1"
+  }
+}

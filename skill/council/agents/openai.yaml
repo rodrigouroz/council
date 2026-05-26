@@ -1,0 +1,3 @@
+display_name: Council
+short_description: Run local peer review before presenting substantial artifacts.
+default_prompt: Use Council to review this artifact or diff, then summarize accepted and rejected findings.

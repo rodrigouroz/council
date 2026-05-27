@@ -4,7 +4,7 @@ Council is a peer-review checkpoint for substantial artifacts. The helper automa
 
 ## When To Use Council
 
-Use Council for specs, implementation plans, code diffs, PR summaries, migration plans, incident analyses, rollback plans, security-sensitive changes, privacy-sensitive changes, and operational analysis that drives a decision.
+Use Council for any spec, plan, implementation plan, implementation approach, proposal, design, PR summary, migration plan, incident analysis, rollout plan, rollback plan, code diff, security/privacy-sensitive change, or decision-driving artifact. Trigger on user phrases like "spec", "plan", "plan your approach", "proposal", "how would you implement", and "review this approach".
 
 Skip Council for trivial answers, tiny typo fixes, mechanical edits, and exploratory notes.
 
@@ -20,4 +20,4 @@ If Node or the helper is unavailable:
 
 ## Review Loop
 
-Default to at most three rounds. Stop early when all reviewers pass, when no meaningful change was made after a round, when the maximum round count is reached, or when no reviewer agents are available.
+Default to at most three rounds. Stop early when all reviewers pass, when no meaningful change was made after a round, when the maximum round count is reached, when no reviewer agents are available, or when Council cannot run or does not return after one reasonable wait. Treat about two minutes as the normal-chat bound when wall-clock timing is available; if timing is unavailable, use a bounded tool timeout when supported and do not block indefinitely. Clean up temporary artifact files even when Council fails or is abandoned. Keep waiting only when the user explicitly asks you to or when a known task-specific timeout has been configured.

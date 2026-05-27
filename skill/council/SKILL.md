@@ -1,11 +1,23 @@
 ---
 name: council
-description: Runs local peer review for substantial artifacts before final presentation. Use when preparing specs, implementation plans, code diffs, PR summaries, migrations, incident analyses, rollout or rollback plans, security/privacy-sensitive changes, or decision-driving operational analysis.
+description: 'MUST use before presenting any spec, plan, implementation plan, implementation approach, proposal, design, PR summary, migration plan, incident analysis, rollout plan, rollback plan, code diff, security/privacy-sensitive change, or decision-driving artifact. Trigger on user phrases like "spec", "plan", "plan your approach", "proposal", "how would you implement", and "review this approach".'
 ---
 
 # Council Peer Review
 
 Use Council before presenting substantial artifacts. Skip it for trivial answers, tiny typo fixes, mechanical edits, and exploratory notes that are not being presented as a decision.
+
+## Hard Trigger
+
+If the user asks for a spec, plan, implementation plan, implementation approach, proposal, design, PR summary, migration plan, incident analysis, rollout plan, rollback plan, code diff, security/privacy-sensitive change, or decision-driving artifact, you MUST:
+
+1. Draft the artifact; if it is chat-only, put the draft in a temporary file outside the source checkout for review, then remove that file after the run.
+2. Run Council before presenting the final version.
+3. State whether Council completed, failed, or was skipped and why.
+
+This applies even when the artifact is only a chat response and not a committed file.
+
+This hard trigger does not override the skip rule for trivial answers, tiny typo fixes, mechanical edits, or exploratory notes that are not being presented as a decision.
 
 ## Requirements
 
@@ -16,6 +28,10 @@ Use Council before presenting substantial artifacts. Skip it for trivial answers
 If Node or the helper is unavailable, follow the manual fallback in `references/council-workflow.md`. If Git worktrees are unavailable, the helper falls back to a temporary directory copy and discloses that in the report.
 
 Council is not an OS sandbox. Reviewer CLIs run as local processes, so do not pass absolute paths to the author's source checkout unless that exposure is intentional.
+
+## If Council Fails Or Hangs
+
+If Council cannot run or does not return after one reasonable wait, stop waiting, clean up any temporary artifact file you created, disclose that the artifact is unreviewed, and do not imply Council passed. Treat about two minutes as the normal-chat bound when wall-clock timing is available; if timing is unavailable, use a bounded tool timeout when supported and do not block indefinitely. Keep waiting only when the user explicitly asks you to or when a known task-specific timeout has been configured.
 
 ## Workflow
 

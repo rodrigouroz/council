@@ -13,9 +13,10 @@ import path from "node:path";
 
 // src/process.ts
 import { spawn } from "node:child_process";
+var DEFAULT_TIMEOUT_MS = 3e5;
 function runProcess(command, args, options) {
   return new Promise((resolve, reject) => {
-    const timeoutMs = options.timeoutMs ?? 12e4;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,

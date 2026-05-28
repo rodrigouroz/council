@@ -31,7 +31,7 @@ Council is not an OS sandbox. Reviewer CLIs run as local processes, so do not pa
 
 ## If Council Fails Or Hangs
 
-If Council cannot run or does not return after one reasonable wait, stop waiting, clean up any temporary artifact file you created, disclose that the artifact is unreviewed, and do not imply Council passed. Treat about two minutes as the normal-chat bound when wall-clock timing is available; if timing is unavailable, use a bounded tool timeout when supported and do not block indefinitely. Keep waiting only when the user explicitly asks you to or when a known task-specific timeout has been configured.
+If Council cannot run or does not return after one reasonable wait, stop waiting, clean up any temporary artifact file you created, disclose that the artifact is unreviewed, and do not imply Council passed. Treat about five minutes as the normal-chat bound when wall-clock timing is available; if timing is unavailable, use a bounded tool timeout when supported and do not block indefinitely. Keep waiting only when the user explicitly asks you to or when a known task-specific timeout has been configured.
 
 ## Workflow
 
@@ -58,10 +58,10 @@ node skill/council/scripts/dist/council.mjs review --diff --base origin/main --c
 
 `--diff` reviews dirty working-tree changes. When `--base` or an upstream ref is available, it also includes committed changes against that ref so stray local edits do not hide the branch diff. If no diff is found, treat the result as unreviewed and pass the correct `--base <ref>`.
 
-The helper has a default reviewer timeout of 120 seconds. Override it only when the task justifies a different bound:
+The helper has a default reviewer timeout of 300 seconds. Override it only when the task justifies a different bound:
 
 ```bash
-node skill/council/scripts/dist/council.mjs review --diff --base origin/main --cwd /path/to/repo --author <codex-or-claude> --timeout-ms 180000
+node skill/council/scripts/dist/council.mjs review --diff --base origin/main --cwd /path/to/repo --author <codex-or-claude> --timeout-ms 600000
 ```
 
 3. Read the report. Treat `BLOCKER` and `QUESTION` items as needing a decision before final presentation.

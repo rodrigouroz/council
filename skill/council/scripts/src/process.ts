@@ -12,9 +12,11 @@ export interface RunResult {
   stderr: string;
 }
 
+export const DEFAULT_TIMEOUT_MS = 300_000;
+
 export function runProcess(command: string, args: string[], options: RunOptions): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const timeoutMs = options.timeoutMs ?? 120_000;
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,

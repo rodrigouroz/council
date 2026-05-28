@@ -50,8 +50,23 @@ For code diffs:
 node skill/council/scripts/dist/council.mjs review --diff --cwd /path/to/repo --author <codex-or-claude>
 ```
 
+For committed PR branches, pass the branch base explicitly:
+
+```bash
+node skill/council/scripts/dist/council.mjs review --diff --base origin/main --cwd /path/to/repo --author <codex-or-claude>
+```
+
+`--diff` reviews dirty working-tree changes. When `--base` or an upstream ref is available, it also includes committed changes against that ref so stray local edits do not hide the branch diff. If no diff is found, treat the result as unreviewed and pass the correct `--base <ref>`.
+
+The helper has a default reviewer timeout of 120 seconds. Override it only when the task justifies a different bound:
+
+```bash
+node skill/council/scripts/dist/council.mjs review --diff --base origin/main --cwd /path/to/repo --author <codex-or-claude> --timeout-ms 180000
+```
+
 3. Read the report. Treat `BLOCKER` and `QUESTION` items as needing a decision before final presentation.
    - If the result says `no reviewer agents available`, treat the artifact as unreviewed: install the opposite reviewer CLI, fix the author value, or use the manual fallback in `references/council-workflow.md`.
+   - If the result says `review incomplete`, treat the artifact as unreviewed until the diff, timeout, reviewer, or empty-output problem is fixed.
 4. Accept valid findings and revise the artifact or implementation yourself.
 5. Reject invalid findings explicitly with a short reason.
 6. Re-run Council after meaningful changes while the round limit allows it:

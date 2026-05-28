@@ -12,6 +12,7 @@ const supportedReviewers: Array<{ id: ReviewerId; executable: string }> = [
 export interface RunReviewerRequest {
   cwd: string;
   prompt: string;
+  timeoutMs?: number;
 }
 
 export function discoverReviewers(env: NodeJS.ProcessEnv = process.env, author?: ReviewerId): Discovery {
@@ -63,32 +64,21 @@ async function runCodex(executable: string, request: RunReviewerRequest): Promis
   const { stdout } = await runProcess(
     executable,
     ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write"],
-    { cwd: request.cwd, input: `${request.prompt}\n` },
+    { cwd: request.cwd, input: `${request.prompt}\n`, timeoutMs: request.timeoutMs },
   );
   return parseCodexOutput(stdout);
 }
 
 async function runClaude(executable: string, request: RunReviewerRequest): Promise<string> {
-  const frame = JSON.stringify({
-    type: "user",
-    message: {
-      role: "user",
-      content: [{ type: "text", text: request.prompt }],
-    },
-  });
   const { stdout } = await runProcess(
     executable,
     [
       "--print",
-      "--input-format",
-      "stream-json",
-      "--output-format",
-      "stream-json",
-      "--verbose",
+      "--no-session-persistence",
       "--permission-mode",
       "bypassPermissions",
     ],
-    { cwd: request.cwd, input: `${frame}\n` },
+    { cwd: request.cwd, input: `${request.prompt}\n`, timeoutMs: request.timeoutMs },
   );
   return parseClaudeOutput(stdout);
 }
@@ -110,23 +100,5 @@ function parseCodexOutput(stdout: string): string {
 }
 
 function parseClaudeOutput(stdout: string): string {
-  const parts: string[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const frame = JSON.parse(line) as {
-        type?: string;
-        message?: { content?: Array<{ type?: string; text?: string }> };
-      };
-      if (frame.type !== "assistant") continue;
-      for (const block of frame.message?.content ?? []) {
-        if (block.type === "text" && block.text) {
-          parts.push(block.text);
-        }
-      }
-    } catch {
-      // Ignore non-JSON output.
-    }
-  }
-  return parts.join("\n").trim();
+  return stdout.trim();
 }

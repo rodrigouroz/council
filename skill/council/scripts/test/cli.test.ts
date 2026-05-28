@@ -46,6 +46,19 @@ test("parseArgs supports explicit author", () => {
   assert.equal(parsed.author, "codex");
 });
 
+test("parseArgs supports base ref and timeout override", () => {
+  const parsed = parseArgs(["review", "--diff", "--base", "origin/main", "--timeout-ms", "30000"], {});
+  assert.equal(parsed.baseRef, "origin/main");
+  assert.equal(parsed.timeoutMs, 30000);
+});
+
+test("parseArgs rejects invalid timeout", () => {
+  assert.throws(
+    () => parseArgs(["review", "--diff", "--timeout-ms", "0"], {}),
+    /--timeout-ms must be at least 1/,
+  );
+});
+
 test("parseArgs reads author from environment when flag is omitted", () => {
   const parsed = parseArgs(["review", "--diff"], { COUNCIL_AUTHOR_AGENT: "claude" });
   assert.equal(parsed.author, "claude");

@@ -6,6 +6,8 @@ export interface ReviewRequest {
   cwd: string;
   artifactPath?: string;
   includeDiff: boolean;
+  baseRef?: string;
+  timeoutMs?: number;
   author?: ReviewerId;
   maxRounds: number;
   round: number;

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -68,18 +68,41 @@ test("runReviewer parses codex agent messages", async () => {
   assert.equal(output.trim(), "PASS: ok");
 });
 
-test("runReviewer parses claude assistant text", async () => {
+test("runReviewer parses claude plain text", async () => {
   const dir = await fakeBin(
     "claude",
     [
       "#!/usr/bin/env node",
       "process.stdin.resume();",
       "process.stdin.on('end', () => {",
-      "  console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'PASS: ok' }] } }));",
+      "  console.log('PASS: ok');",
       "});",
     ].join("\n"),
   );
   const [reviewer] = discoverReviewers({ PATH: dir }).reviewers;
   const output = await runReviewer(reviewer, { cwd: dir, prompt: "review" });
   assert.equal(output.trim(), "PASS: ok");
+});
+
+test("runReviewer invokes claude without session persistence or verbose mode", async () => {
+  const dir = await fakeBin(
+    "claude",
+    [
+      "#!/usr/bin/env node",
+      "const fs = require('node:fs');",
+      "fs.writeFileSync('claude-args.json', JSON.stringify(process.argv.slice(2)));",
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  console.log('PASS: ok');",
+      "});",
+    ].join("\n"),
+  );
+  const [reviewer] = discoverReviewers({ PATH: dir }).reviewers;
+  await runReviewer(reviewer, { cwd: dir, prompt: "review" });
+
+  const args = JSON.parse(await readFile(path.join(dir, "claude-args.json"), "utf8"));
+  assert.equal(args.includes("--no-session-persistence"), true);
+  assert.equal(args.includes("--verbose"), false);
+  assert.equal(args.includes("--input-format"), false);
+  assert.equal(args.includes("--output-format"), false);
 });

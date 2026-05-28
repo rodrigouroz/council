@@ -32,6 +32,12 @@ export function parseArgs(args: string[], env: NodeJS.ProcessEnv = processEnv): 
       case "--diff":
         request.includeDiff = true;
         break;
+      case "--base":
+        request.baseRef = requireValue(rest, ++i, "--base");
+        break;
+      case "--timeout-ms":
+        request.timeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--timeout-ms"), "--timeout-ms");
+        break;
       case "--author":
         request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");
         break;

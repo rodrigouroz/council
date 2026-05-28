@@ -15,6 +15,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 function runProcess(command, args, options) {
   return new Promise((resolve, reject) => {
+    const timeoutMs = options.timeoutMs ?? 12e4;
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
@@ -22,6 +23,16 @@ function runProcess(command, args, options) {
     });
     let stdout = "";
     let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 2e3).unref();
+      reject(new Error(`timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -30,8 +41,16 @@ function runProcess(command, args, options) {
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
     });
-    child.on("error", reject);
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
     child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -97,32 +116,21 @@ async function runCodex(executable, request) {
     executable,
     ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write"],
     { cwd: request.cwd, input: `${request.prompt}
-` }
+`, timeoutMs: request.timeoutMs }
   );
   return parseCodexOutput(stdout);
 }
 async function runClaude(executable, request) {
-  const frame = JSON.stringify({
-    type: "user",
-    message: {
-      role: "user",
-      content: [{ type: "text", text: request.prompt }]
-    }
-  });
   const { stdout } = await runProcess(
     executable,
     [
       "--print",
-      "--input-format",
-      "stream-json",
-      "--output-format",
-      "stream-json",
-      "--verbose",
+      "--no-session-persistence",
       "--permission-mode",
       "bypassPermissions"
     ],
-    { cwd: request.cwd, input: `${frame}
-` }
+    { cwd: request.cwd, input: `${request.prompt}
+`, timeoutMs: request.timeoutMs }
   );
   return parseClaudeOutput(stdout);
 }
@@ -141,21 +149,7 @@ function parseCodexOutput(stdout) {
   return parts.join("\n").trim();
 }
 function parseClaudeOutput(stdout) {
-  const parts = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    try {
-      const frame = JSON.parse(line);
-      if (frame.type !== "assistant") continue;
-      for (const block of frame.message?.content ?? []) {
-        if (block.type === "text" && block.text) {
-          parts.push(block.text);
-        }
-      }
-    } catch {
-    }
-  }
-  return parts.join("\n").trim();
+  return stdout.trim();
 }
 
 // src/workspace.ts
@@ -278,13 +272,17 @@ async function runReview(request) {
     nextRoundRecommended: false
   };
   const artifact = await readArtifact(request);
-  const diff = await readReviewDiff(request);
+  const diffResult = await readReviewDiff(request);
+  report.harnessNotes.push(...diffResult.harnessNotes);
+  if (request.includeDiff && !diffResult.diff) {
+    return report;
+  }
   if (discovery.reviewers.length === 0) {
     report.harnessNotes.push("no reviewer agents available");
     return report;
   }
   const reviewerResults = await Promise.all(
-    discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diff))
+    discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff))
   );
   for (const [index, result] of reviewerResults.entries()) {
     const reviewer = discovery.reviewers[index];
@@ -299,7 +297,7 @@ async function runReview(request) {
       report.harnessNotes.push(`reviewer ${reviewer.id} left workspace changes: ${result.workspaceStatus}`);
     }
   }
-  report.nextRoundRecommended = report.blockingFindings.length > 0 || report.questions.length > 0;
+  report.nextRoundRecommended = report.blockingFindings.length > 0 || report.questions.length > 0 || report.reviewerResults.some((result) => result.error);
   return report;
 }
 function buildPrompt(input) {
@@ -372,8 +370,11 @@ async function runOneReviewer(reviewer, request, artifact, diff) {
       maxRounds: request.maxRounds,
       changeSummary: request.changeSummary
     });
-    const output = await runReviewer(reviewer, { cwd: prepared.path, prompt });
+    const output = await runReviewer(reviewer, { cwd: prepared.path, prompt, timeoutMs: request.timeoutMs });
     const result = parseReviewerOutput(reviewer.id, output);
+    if (!hasUsableReviewerOutput(result)) {
+      result.error = "no usable reviewer output; expected BLOCKER, SUGGESTION, QUESTION, or PASS";
+    }
     const status = await prepared.status();
     if (prepared.note) {
       result.workspaceStatus = prepared.note;
@@ -400,13 +401,60 @@ async function readArtifact(request) {
   return readFile2(request.artifactPath, "utf8");
 }
 async function readReviewDiff(request) {
-  if (!request.includeDiff) return "";
+  if (!request.includeDiff) return { diff: "", harnessNotes: [] };
   try {
-    const { stdout } = await runProcess("git", ["diff", "--binary", "HEAD", "--"], { cwd: request.cwd });
-    return stdout;
-  } catch {
-    return "";
+    const dirtyDiff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
+    const baseRef = request.baseRef ?? await readUpstreamRef(request.cwd);
+    if (baseRef) {
+      const mergeBase = await gitStdout(request.cwd, ["merge-base", baseRef, "HEAD"]);
+      const committedDiff = await gitStdout(request.cwd, ["diff", "--binary", `${mergeBase}...HEAD`, "--"]);
+      if (committedDiff && dirtyDiff) {
+        return {
+          diff: `${committedDiff}
+
+# ---- dirty working-tree changes ----
+${dirtyDiff}`,
+          harnessNotes: [`diff includes committed changes against ${baseRef} and dirty working-tree changes`]
+        };
+      }
+      if (committedDiff) {
+        return { diff: committedDiff, harnessNotes: [] };
+      }
+      if (dirtyDiff) {
+        return { diff: dirtyDiff, harnessNotes: [] };
+      }
+      return {
+        diff: "",
+        harnessNotes: [`no diff found against ${baseRef}`]
+      };
+    }
+    if (dirtyDiff) {
+      return { diff: dirtyDiff, harnessNotes: [] };
+    }
+    return {
+      diff: "",
+      harnessNotes: ["no diff found; pass --base <ref> for committed branch review"]
+    };
+  } catch (error) {
+    return {
+      diff: "",
+      harnessNotes: [`failed to read diff: ${error.message}`]
+    };
   }
+}
+async function gitStdout(cwd, args) {
+  const { stdout } = await runProcess("git", args, { cwd });
+  return stdout.trimEnd();
+}
+async function readUpstreamRef(cwd) {
+  try {
+    return await gitStdout(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+  } catch {
+    return void 0;
+  }
+}
+function hasUsableReviewerOutput(result) {
+  return result.pass || result.blockingFindings.length > 0 || result.suggestions.length > 0 || result.questions.length > 0 || Boolean(result.error);
 }
 function artifactKind(request) {
   if (request.includeDiff) return "diff";
@@ -467,6 +515,9 @@ function findingSection(title, findings) {
   return [`## ${title}`, ...findings.map((finding2) => `- ${finding2.reviewer}: ${finding2.text}`)];
 }
 function reportResult(report) {
+  if (report.reviewerResults.some((result) => result.error) || report.harnessNotes.some((note) => note.startsWith("no diff found") || note.startsWith("failed to read diff"))) {
+    return "review incomplete";
+  }
   if (report.reviewers.length === 0) {
     return "no reviewer agents available";
   }
@@ -499,6 +550,12 @@ function parseArgs(args, env = processEnv) {
         break;
       case "--diff":
         request.includeDiff = true;
+        break;
+      case "--base":
+        request.baseRef = requireValue(rest, ++i, "--base");
+        break;
+      case "--timeout-ms":
+        request.timeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--timeout-ms"), "--timeout-ms");
         break;
       case "--author":
         request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");

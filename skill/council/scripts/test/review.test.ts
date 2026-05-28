@@ -1,8 +1,31 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
+import { promisify } from "node:util";
 
-import { buildPrompt, parseReviewerOutput, readReviewDiff } from "../src/review.ts";
+import { buildPrompt, parseReviewerOutput, readReviewDiff, runReview } from "../src/review.ts";
 import { renderJson, renderMarkdown } from "../src/report.ts";
+
+const execFileAsync = promisify(execFile);
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout.trim();
+}
+
+async function initRepo(): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), "council-review-repo-"));
+  await git(dir, ["init"]);
+  await git(dir, ["config", "user.email", "council@example.test"]);
+  await git(dir, ["config", "user.name", "Council Test"]);
+  await writeFile(path.join(dir, "tracked.txt"), "base\n");
+  await git(dir, ["add", "."]);
+  await git(dir, ["commit", "-m", "initial"]);
+  return dir;
+}
 
 test("parseReviewerOutput buckets findings", () => {
   const parsed = parseReviewerOutput(
@@ -57,7 +80,57 @@ test("parseReviewerOutput resets finding continuation on blank lines", () => {
 });
 
 test("readReviewDiff only reads git diff when diff review is requested", async () => {
-  assert.equal(await readReviewDiff({ cwd: process.cwd(), includeDiff: false }), "");
+  assert.deepEqual(await readReviewDiff({ cwd: process.cwd(), includeDiff: false }), {
+    diff: "",
+    harnessNotes: [],
+  });
+});
+
+test("readReviewDiff reads committed branch diff from a base ref", async () => {
+  const repo = await initRepo();
+  await git(repo, ["checkout", "-b", "feature"]);
+  await writeFile(path.join(repo, "tracked.txt"), "changed\n");
+  await git(repo, ["commit", "-am", "change tracked"]);
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true, baseRef: "main" });
+
+  assert.match(result.diff, /diff --git a\/tracked.txt b\/tracked.txt/);
+  assert.deepEqual(result.harnessNotes, []);
+});
+
+test("readReviewDiff includes committed and dirty changes when both exist", async () => {
+  const repo = await initRepo();
+  await git(repo, ["checkout", "-b", "feature"]);
+  await writeFile(path.join(repo, "tracked.txt"), "committed\n");
+  await git(repo, ["commit", "-am", "change tracked"]);
+  await writeFile(path.join(repo, "dirty.txt"), "dirty\n");
+  await git(repo, ["add", "dirty.txt"]);
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true, baseRef: "main" });
+
+  assert.match(result.diff, /committed/);
+  assert.match(result.diff, /dirty working-tree changes/);
+  assert.match(result.diff, /dirty/);
+  assert.match(result.harnessNotes.join("\n"), /includes committed changes against main and dirty working-tree changes/);
+});
+
+test("readReviewDiff reports clean branch without a diff", async () => {
+  const repo = await initRepo();
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true });
+
+  assert.equal(result.diff, "");
+  assert.match(result.harnessNotes.join("\n"), /no diff found/);
+});
+
+test("readReviewDiff reports invalid base refs instead of returning an empty diff", async () => {
+  const repo = await initRepo();
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true, baseRef: "missing-ref" });
+
+  assert.equal(result.diff, "");
+  assert.match(result.harnessNotes.join("\n"), /failed to read diff/);
+  assert.match(result.harnessNotes.join("\n"), /missing-ref/);
 });
 
 test("buildPrompt includes review contract", () => {
@@ -130,4 +203,57 @@ test("reports with no reviewers do not render as clean passes", () => {
 
   const json = JSON.parse(renderJson(report));
   assert.equal(json.result, "no reviewer agents available");
+});
+
+test("reports with no diff found render as incomplete", () => {
+  const report = {
+    round: 1,
+    maxRounds: 3,
+    artifact: "git diff",
+    reviewers: [],
+    blockingFindings: [],
+    suggestions: [],
+    questions: [],
+    harnessNotes: ["no diff found; pass --base <ref> for committed branch review"],
+    reviewerResults: [],
+    nextRoundRecommended: false,
+  };
+
+  const json = JSON.parse(renderJson(report));
+  assert.equal(json.result, "review incomplete");
+});
+
+test("reports with empty reviewer output do not render as clean passes", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-empty-reviewer-"));
+  await writeFile(
+    path.join(binDir, "claude"),
+    [`#!${process.execPath}`, "process.stdin.resume();", "process.stdin.on('end', () => process.exit(0));"].join("\n"),
+    { mode: 0o755 },
+  );
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  try {
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      author: "codex",
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+    });
+
+    assert.match(
+      report.harnessNotes.join("\n"),
+      /reviewer claude failed: no usable reviewer output; expected BLOCKER, SUGGESTION, QUESTION, or PASS/,
+    );
+    assert.equal(renderJson(report).includes('"result": "review incomplete"'), true);
+  } finally {
+    process.env.PATH = oldPath;
+  }
 });

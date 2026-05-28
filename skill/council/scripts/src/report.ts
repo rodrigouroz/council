@@ -42,6 +42,12 @@ function findingSection(title: string, findings: Finding[]): string[] {
 }
 
 function reportResult(report: CouncilReport): string {
+  if (
+    report.reviewerResults.some((result) => result.error) ||
+    report.harnessNotes.some((note) => note.startsWith("no diff found") || note.startsWith("failed to read diff"))
+  ) {
+    return "review incomplete";
+  }
   if (report.reviewers.length === 0) {
     return "no reviewer agents available";
   }

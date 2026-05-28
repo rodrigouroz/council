@@ -21,3 +21,9 @@ If Node or the helper is unavailable:
 ## Review Loop
 
 Default to at most three rounds. Stop early when all reviewers pass, when no meaningful change was made after a round, when the maximum round count is reached, when no reviewer agents are available, or when Council cannot run or does not return after one reasonable wait. Treat about two minutes as the normal-chat bound when wall-clock timing is available; if timing is unavailable, use a bounded tool timeout when supported and do not block indefinitely. Clean up temporary artifact files even when Council fails or is abandoned. Keep waiting only when the user explicitly asks you to or when a known task-specific timeout has been configured.
+
+## Diff Review
+
+Use `--diff --base <ref>` for committed PR branches, for example `--base origin/main`. The helper reviews dirty changes and, when a base or upstream ref is available, committed changes against that ref. If the report says `no diff found`, the review is incomplete; rerun with the correct base or create the intended diff before relying on Council.
+
+Reviewer processes time out after 120 seconds by default. Use `--timeout-ms <milliseconds>` only when a task-specific bound is needed. Empty reviewer output and timed-out reviewers make the review incomplete, not passed.

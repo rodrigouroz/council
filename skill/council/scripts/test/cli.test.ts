@@ -52,6 +52,65 @@ test("parseArgs supports base ref and timeout override", () => {
   assert.equal(parsed.timeoutMs, 30000);
 });
 
+test("parseArgs supports explicit diff modes", () => {
+  const parsed = parseArgs(["review", "--mode", "branch", "--base", "origin/main"], {});
+  assert.equal(parsed.includeDiff, true);
+  assert.equal(parsed.diffMode, "branch");
+  assert.equal(parsed.baseRef, "origin/main");
+});
+
+test("parseArgs allows branch mode to use an upstream ref fallback", () => {
+  const parsed = parseArgs(["review", "--mode", "branch"], {});
+  assert.equal(parsed.includeDiff, true);
+  assert.equal(parsed.diffMode, "branch");
+  assert.equal(parsed.baseRef, undefined);
+});
+
+test("parseArgs supports commit review shorthand", () => {
+  const parsed = parseArgs(["review", "--commit", "HEAD"], {});
+  assert.equal(parsed.includeDiff, true);
+  assert.equal(parsed.diffMode, "commit");
+  assert.equal(parsed.commitRef, "HEAD");
+});
+
+test("parseArgs rejects commit mode without a commit ref", () => {
+  assert.throws(
+    () => parseArgs(["review", "--mode", "commit"], {}),
+    /--mode commit requires --commit/,
+  );
+});
+
+test("parseArgs supports reviewer selection and panel shorthand", () => {
+  const selected = parseArgs(["review", "--diff", "--reviewers", "claude,codex"], {});
+  assert.deepEqual(selected.reviewers, ["claude", "codex"]);
+
+  const panel = parseArgs(["review", "--diff", "--panel"], {});
+  assert.deepEqual(panel.reviewers, ["codex", "claude"]);
+});
+
+test("parseArgs rejects unknown reviewers", () => {
+  assert.throws(
+    () => parseArgs(["review", "--diff", "--reviewers", "gemini"], {}),
+    /--reviewers must contain codex or claude/,
+  );
+});
+
+test("parseArgs supports parallel test command", () => {
+  const parsed = parseArgs(["review", "--diff", "--parallel-tests", "npm test"], {});
+  assert.equal(parsed.parallelTests, "npm test");
+});
+
+test("parseArgs supports explicitly allowing sandboxed reviewers", () => {
+  const parsed = parseArgs(["review", "--diff", "--allow-sandboxed-reviewers"], {});
+  assert.equal(parsed.allowSandboxedReviewers, true);
+});
+
+test("parseArgs supports independent parallel test timeout", () => {
+  const parsed = parseArgs(["review", "--diff", "--timeout-ms", "600000", "--test-timeout-ms", "30000"], {});
+  assert.equal(parsed.timeoutMs, 600000);
+  assert.equal(parsed.testTimeoutMs, 30000);
+});
+
 test("parseArgs rejects invalid timeout", () => {
   assert.throws(
     () => parseArgs(["review", "--diff", "--timeout-ms", "0"], {}),

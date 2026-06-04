@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { promisify } from "node:util";
 
-import { buildPrompt, parseReviewerOutput, readReviewDiff, runReview } from "../src/review.ts";
+import { buildPrompt, parseReviewerOutput, readReviewDiff, runReview, sandboxHarnessNotes } from "../src/review.ts";
 import { renderJson, renderMarkdown } from "../src/report.ts";
 
 const execFileAsync = promisify(execFile);
@@ -21,6 +21,7 @@ async function initRepo(): Promise<string> {
   await git(dir, ["init"]);
   await git(dir, ["config", "user.email", "council@example.test"]);
   await git(dir, ["config", "user.name", "Council Test"]);
+  await git(dir, ["config", "commit.gpgsign", "false"]);
   await writeFile(path.join(dir, "tracked.txt"), "base\n");
   await git(dir, ["add", "."]);
   await git(dir, ["commit", "-m", "initial"]);
@@ -79,11 +80,50 @@ test("parseReviewerOutput resets finding continuation on blank lines", () => {
   assert.equal(parsed.suggestions[0]?.text, "name the risk owner");
 });
 
+test("parseReviewerOutput accepts markdown-wrapped finding prefixes", () => {
+  const parsed = parseReviewerOutput(
+    "claude",
+    [
+      '**BLOCKER: branch mode can render a false pass.**',
+      "**BLOCKER:** parse bolded label with colon.",
+      "**BLOCKER**: parse bolded label before colon.",
+      "- **SUGGESTION: add a regression test.**",
+      "* SUGGESTION: parse star bullets too.",
+      "1. **SUGGESTION: parse numbered bold findings.**",
+      "**QUESTION: should tests run on no-diff paths?**",
+    ].join("\n"),
+  );
+
+  assert.equal(parsed.blockingFindings[0]?.text, "branch mode can render a false pass.");
+  assert.equal(parsed.blockingFindings[1]?.text, "parse bolded label with colon.");
+  assert.equal(parsed.blockingFindings[2]?.text, "parse bolded label before colon.");
+  assert.equal(parsed.suggestions[0]?.text, "add a regression test.");
+  assert.equal(parsed.suggestions[1]?.text, "parse star bullets too.");
+  assert.equal(parsed.suggestions[2]?.text, "parse numbered bold findings.");
+  assert.equal(parsed.questions[0]?.text, "should tests run on no-diff paths?");
+});
+
+test("parseReviewerOutput does not treat numbered explanatory lines as findings", () => {
+  const parsed = parseReviewerOutput("claude", "1. BLOCKER: means a release-stopping issue.");
+  assert.equal(parsed.blockingFindings.length, 0);
+});
+
+test("parseReviewerOutput preserves inline emphasis inside finding text", () => {
+  const parsed = parseReviewerOutput("claude", "BLOCKER: preserve final **important**");
+  assert.equal(parsed.blockingFindings[0]?.text, "preserve final **important**");
+});
+
 test("readReviewDiff only reads git diff when diff review is requested", async () => {
   assert.deepEqual(await readReviewDiff({ cwd: process.cwd(), includeDiff: false }), {
     diff: "",
     harnessNotes: [],
   });
+});
+
+test("sandboxHarnessNotes warns when Codex sandboxing may block reviewer auth", () => {
+  assert.deepEqual(sandboxHarnessNotes({ CODEX_SANDBOX: "seatbelt", CODEX_SANDBOX_NETWORK_DISABLED: "1" }), [
+    "running inside CODEX_SANDBOX=seatbelt with network disabled; reviewer CLIs may be unable to access auth, home state, or network unless reviewer auth is environment-based and network is available.",
+  ]);
 });
 
 test("readReviewDiff reads committed branch diff from a base ref", async () => {
@@ -112,6 +152,69 @@ test("readReviewDiff includes committed and dirty changes when both exist", asyn
   assert.match(result.diff, /dirty working-tree changes/);
   assert.match(result.diff, /dirty/);
   assert.match(result.harnessNotes.join("\n"), /includes committed changes against main and dirty working-tree changes/);
+});
+
+test("readReviewDiff local mode reads only dirty changes", async () => {
+  const repo = await initRepo();
+  await git(repo, ["checkout", "-b", "feature"]);
+  await writeFile(path.join(repo, "branch-only.txt"), "committed branch file\n");
+  await git(repo, ["add", "branch-only.txt"]);
+  await git(repo, ["commit", "-m", "add branch-only file"]);
+  await writeFile(path.join(repo, "tracked.txt"), "dirty\n");
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true, diffMode: "local" });
+
+  assert.doesNotMatch(result.diff, /branch-only/);
+  assert.match(result.diff, /dirty/);
+  assert.deepEqual(result.harnessNotes, []);
+});
+
+test("readReviewDiff local mode notes ignored base refs", async () => {
+  const repo = await initRepo();
+  await writeFile(path.join(repo, "tracked.txt"), "dirty\n");
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true, diffMode: "local", baseRef: "main" });
+
+  assert.match(result.harnessNotes.join("\n"), /--base main ignored by --mode local/);
+});
+
+test("readReviewDiff branch mode reads committed branch changes against base", async () => {
+  const repo = await initRepo();
+  await git(repo, ["checkout", "-b", "feature"]);
+  await writeFile(path.join(repo, "tracked.txt"), "committed\n");
+  await git(repo, ["commit", "-am", "change tracked"]);
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true, diffMode: "branch", baseRef: "main" });
+
+  assert.match(result.diff, /committed/);
+  assert.deepEqual(result.harnessNotes, []);
+});
+
+test("readReviewDiff commit mode reads a single committed change", async () => {
+  const repo = await initRepo();
+  await writeFile(path.join(repo, "tracked.txt"), "committed\n");
+  await git(repo, ["commit", "-am", "change tracked"]);
+
+  const result = await readReviewDiff({ cwd: repo, includeDiff: true, diffMode: "commit", commitRef: "HEAD" });
+
+  assert.match(result.diff, /committed/);
+  assert.deepEqual(result.harnessNotes, []);
+});
+
+test("readReviewDiff commit mode notes ignored base refs", async () => {
+  const repo = await initRepo();
+  await writeFile(path.join(repo, "tracked.txt"), "committed\n");
+  await git(repo, ["commit", "-am", "change tracked"]);
+
+  const result = await readReviewDiff({
+    cwd: repo,
+    includeDiff: true,
+    diffMode: "commit",
+    commitRef: "HEAD",
+    baseRef: "main",
+  });
+
+  assert.match(result.harnessNotes.join("\n"), /--base main ignored by --commit HEAD/);
 });
 
 test("readReviewDiff reports clean branch without a diff", async () => {
@@ -223,6 +326,145 @@ test("reports with no diff found render as incomplete", () => {
   assert.equal(json.result, "review incomplete");
 });
 
+test("reports with branch mode missing a base or upstream render as incomplete", () => {
+  const report = {
+    round: 1,
+    maxRounds: 3,
+    artifact: "git diff",
+    reviewers: ["claude"],
+    blockingFindings: [],
+    suggestions: [],
+    questions: [],
+    harnessNotes: ["--mode branch requires --base or an upstream ref"],
+    reviewerResults: [],
+    nextRoundRecommended: false,
+  };
+
+  const json = JSON.parse(renderJson(report));
+  assert.equal(json.result, "review incomplete");
+});
+
+test("reports include review command and parallel test proof", () => {
+  const report = {
+    round: 1,
+    maxRounds: 3,
+    artifact: "git diff",
+    reviewers: ["claude"],
+    blockingFindings: [],
+    suggestions: [],
+    questions: [],
+    harnessNotes: [],
+    reviewerResults: [],
+    nextRoundRecommended: false,
+    reviewCommand: "council review --mode branch --base origin/main",
+    testProof: {
+      command: "npm test",
+      status: "passed" as const,
+      summary: "stdout proof",
+    },
+  };
+
+  const markdown = renderMarkdown(report);
+  assert.match(markdown, /review command: council review --mode branch --base origin\/main/);
+  assert.match(markdown, /parallel tests: passed/);
+  assert.match(markdown, /npm test/);
+
+  const json = JSON.parse(renderJson(report));
+  assert.equal(json.testProof.status, "passed");
+});
+
+test("parallel tests use the independent test timeout when provided", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+
+  const report = await runReview({
+    command: "review",
+    cwd: repo,
+    artifactPath: artifact,
+    includeDiff: false,
+    author: "codex",
+    reviewers: ["codex"],
+    maxRounds: 3,
+    round: 1,
+    changeSummary: "",
+    format: "markdown",
+    timeoutMs: 1_000,
+    testTimeoutMs: 20,
+    parallelTests: `${process.execPath} -e "setTimeout(() => {}, 100)"`,
+  });
+
+  assert.equal(report.testProof?.status, "failed");
+  assert.match(report.testProof?.summary ?? "", /timed out after 20ms/);
+});
+
+test("parallel tests record passing proof through runReview", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+
+  const report = await runReview({
+    command: "review",
+    cwd: repo,
+    artifactPath: artifact,
+    includeDiff: false,
+    author: "codex",
+    reviewers: ["codex"],
+    maxRounds: 3,
+    round: 1,
+    changeSummary: "",
+    format: "markdown",
+    parallelTests: `${process.execPath} -e "console.log('proof ok')"`,
+  });
+
+  assert.equal(report.testProof?.status, "passed");
+  assert.match(report.testProof?.summary ?? "", /proof ok/);
+});
+
+test("failed parallel tests are summarized and noted without reviewers", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+
+  const report = await runReview({
+    command: "review",
+    cwd: repo,
+    artifactPath: artifact,
+    includeDiff: false,
+    author: "codex",
+    reviewers: ["codex"],
+    maxRounds: 3,
+    round: 1,
+    changeSummary: "",
+    format: "markdown",
+    parallelTests: `${process.execPath} -e "console.error('x'.repeat(1000)); process.exit(1)"`,
+  });
+
+  assert.equal(report.testProof?.status, "failed");
+  assert.ok((report.testProof?.summary.length ?? 0) <= 500);
+  assert.match(report.harnessNotes.join("\n"), /parallel tests failed:/);
+});
+
+test("parallel tests are skipped when diff review has no diff", async () => {
+  const repo = await initRepo();
+
+  const report = await runReview({
+    command: "review",
+    cwd: repo,
+    includeDiff: true,
+    diffMode: "local",
+    author: "codex",
+    reviewers: ["codex"],
+    maxRounds: 3,
+    round: 1,
+    changeSummary: "",
+    format: "markdown",
+    parallelTests: `${process.execPath} -e "console.log('should not run')"`,
+  });
+
+  assert.equal(report.testProof, undefined);
+});
+
 test("reports with empty reviewer output do not render as clean passes", async () => {
   const repo = await initRepo();
   const artifact = path.join(repo, "artifact.md");
@@ -234,7 +476,11 @@ test("reports with empty reviewer output do not render as clean passes", async (
     { mode: 0o755 },
   );
   const oldPath = process.env.PATH;
+  const oldSandbox = process.env.CODEX_SANDBOX;
+  const oldNetwork = process.env.CODEX_SANDBOX_NETWORK_DISABLED;
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  delete process.env.CODEX_SANDBOX;
+  delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
   try {
     const report = await runReview({
       command: "review",
@@ -255,5 +501,215 @@ test("reports with empty reviewer output do not render as clean passes", async (
     assert.equal(renderJson(report).includes('"result": "review incomplete"'), true);
   } finally {
     process.env.PATH = oldPath;
+    if (oldSandbox === undefined) {
+      delete process.env.CODEX_SANDBOX;
+    } else {
+      process.env.CODEX_SANDBOX = oldSandbox;
+    }
+    if (oldNetwork === undefined) {
+      delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+    } else {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = oldNetwork;
+    }
+  }
+});
+
+test("runReview blocks reviewer launch inside Codex sandbox", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-sandbox-reviewer-"));
+  const marker = path.join(repo, "reviewer-launched.txt");
+  await writeFile(
+    path.join(binDir, "claude"),
+    [
+      `#!${process.execPath}`,
+      "const fs = require('node:fs');",
+      `fs.writeFileSync(${JSON.stringify(marker)}, 'launched');`,
+      "console.log('PASS: ok');",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+
+  const oldPath = process.env.PATH;
+  const oldSandbox = process.env.CODEX_SANDBOX;
+  const oldNetwork = process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  process.env.CODEX_SANDBOX = "seatbelt";
+  process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+  try {
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      author: "codex",
+      reviewers: ["claude"],
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+    });
+
+    assert.match(report.harnessNotes.join("\n"), /reviewer launch blocked/);
+    assert.deepEqual(report.reviewers, []);
+    assert.equal(renderJson(report).includes('"result": "review incomplete"'), true);
+    await assert.rejects(() => readFile(marker, "utf8"));
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldSandbox === undefined) {
+      delete process.env.CODEX_SANDBOX;
+    } else {
+      process.env.CODEX_SANDBOX = oldSandbox;
+    }
+    if (oldNetwork === undefined) {
+      delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+    } else {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = oldNetwork;
+    }
+  }
+});
+
+test("blocked sandbox reviewer launch still records parallel test proof", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-sandbox-testproof-"));
+  await writeFile(path.join(binDir, "claude"), `#!${process.execPath}\nconsole.log('PASS: should not launch')\n`, {
+    mode: 0o755,
+  });
+
+  const oldPath = process.env.PATH;
+  const oldSandbox = process.env.CODEX_SANDBOX;
+  const oldNetwork = process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  process.env.CODEX_SANDBOX = "seatbelt";
+  process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+  try {
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      author: "codex",
+      reviewers: ["claude"],
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+      parallelTests: `${process.execPath} -e "console.log('proof ok')"`,
+    });
+
+    assert.match(report.harnessNotes.join("\n"), /reviewer launch blocked/);
+    assert.equal(report.testProof?.status, "passed");
+    assert.match(report.testProof?.summary ?? "", /proof ok/);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldSandbox === undefined) {
+      delete process.env.CODEX_SANDBOX;
+    } else {
+      process.env.CODEX_SANDBOX = oldSandbox;
+    }
+    if (oldNetwork === undefined) {
+      delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+    } else {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = oldNetwork;
+    }
+  }
+});
+
+test("runReview allows sandboxed reviewer launch with network and env auth", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-sandbox-env-auth-"));
+  await writeFile(path.join(binDir, "claude"), `#!${process.execPath}\nconsole.log('PASS: ok')\n`, { mode: 0o755 });
+
+  const oldPath = process.env.PATH;
+  const oldSandbox = process.env.CODEX_SANDBOX;
+  const oldNetwork = process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+  const oldAnthropicKey = process.env.ANTHROPIC_API_KEY;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  process.env.CODEX_SANDBOX = "landlock";
+  delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  try {
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      author: "codex",
+      reviewers: ["claude"],
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+    });
+
+    assert.doesNotMatch(report.harnessNotes.join("\n"), /reviewer launch blocked/);
+    assert.equal(report.reviewerResults[0]?.pass, true);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldSandbox === undefined) {
+      delete process.env.CODEX_SANDBOX;
+    } else {
+      process.env.CODEX_SANDBOX = oldSandbox;
+    }
+    if (oldNetwork === undefined) {
+      delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+    } else {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = oldNetwork;
+    }
+    if (oldAnthropicKey === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = oldAnthropicKey;
+    }
+  }
+});
+
+test("runReview allows sandboxed reviewer launch with explicit override", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-sandbox-override-"));
+  await writeFile(path.join(binDir, "claude"), `#!${process.execPath}\nconsole.log('PASS: ok')\n`, { mode: 0o755 });
+
+  const oldPath = process.env.PATH;
+  const oldSandbox = process.env.CODEX_SANDBOX;
+  const oldNetwork = process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  process.env.CODEX_SANDBOX = "seatbelt";
+  process.env.CODEX_SANDBOX_NETWORK_DISABLED = "1";
+  try {
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      author: "codex",
+      reviewers: ["claude"],
+      allowSandboxedReviewers: true,
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+    });
+
+    assert.doesNotMatch(report.harnessNotes.join("\n"), /reviewer launch blocked/);
+    assert.equal(report.reviewerResults[0]?.pass, true);
+  } finally {
+    process.env.PATH = oldPath;
+    if (oldSandbox === undefined) {
+      delete process.env.CODEX_SANDBOX;
+    } else {
+      process.env.CODEX_SANDBOX = oldSandbox;
+    }
+    if (oldNetwork === undefined) {
+      delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
+    } else {
+      process.env.CODEX_SANDBOX_NETWORK_DISABLED = oldNetwork;
+    }
   }
 });

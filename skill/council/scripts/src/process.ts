@@ -58,7 +58,7 @@ export function runProcess(command: string, args: string[], options: RunOptions)
         resolve({ stdout, stderr });
         return;
       }
-      reject(new Error(`${command} exited with code ${code}: ${stderr.trim()}`));
+      reject(new Error(failedProcessMessage(command, code, stdout, stderr)));
     });
 
     if (options.input !== undefined) {
@@ -67,4 +67,65 @@ export function runProcess(command: string, args: string[], options: RunOptions)
       child.stdin.end();
     }
   });
+}
+
+export function runShellCommand(command: string, options: RunOptions): Promise<RunResult> {
+  return new Promise((resolve, reject) => {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const child = spawn(command, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      shell: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 2_000).unref();
+      reject(new Error(`timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(new Error(failedProcessMessage(command, code, stdout, stderr)));
+    });
+
+    if (options.input !== undefined) {
+      child.stdin.end(options.input);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+
+function failedProcessMessage(command: string, code: number | null, stdout: string, stderr: string): string {
+  const diagnostic = stderr.trim() || stdout.trim();
+  return `${command} exited with code ${code}: ${diagnostic}`;
 }

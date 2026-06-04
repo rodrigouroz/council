@@ -29,6 +29,8 @@ If Node or the helper is unavailable, follow the manual fallback in `references/
 
 Council is not an OS sandbox. Reviewer CLIs run as local processes, so do not pass absolute paths to the author's source checkout unless that exposure is intentional.
 
+When running from Codex with filesystem or network sandboxing enabled, do not launch peer reviewer CLIs inside an unsafe sandbox. Reviewer CLIs usually need access to their own auth state, home-directory state, and network. In Codex tool calls, run the Council helper with `sandbox_permissions: "require_escalated"` and explain that Council needs to run local reviewer CLIs. If escalation is unavailable or denied, treat the artifact as unreviewed instead of launching reviewers in the sandbox. `--allow-sandboxed-reviewers` is an unconditional override; use it only when you have independently verified reviewer auth is environment-based and network is available.
+
 ## If Council Fails Or Hangs
 
 If Council cannot run or does not return after one reasonable wait, stop waiting, clean up any temporary artifact file you created, disclose that the artifact is unreviewed, and do not imply Council passed. Treat about five minutes as the normal-chat bound when wall-clock timing is available; if timing is unavailable, use a bounded tool timeout when supported and do not block indefinitely. Keep waiting only when the user explicitly asks you to or when a known task-specific timeout has been configured.
@@ -50,6 +52,21 @@ For code diffs:
 node skill/council/scripts/dist/council.mjs review --diff --cwd /path/to/repo --author <codex-or-claude>
 ```
 
+For closeout review, prefer explicit diff targets when the intended scope is known:
+
+```bash
+# Dirty working-tree changes only.
+node skill/council/scripts/dist/council.mjs review --mode local --cwd /path/to/repo --author <codex-or-claude>
+
+# Branch changes against a base ref, plus dirty changes when present.
+node skill/council/scripts/dist/council.mjs review --mode branch --base origin/main --cwd /path/to/repo --author <codex-or-claude>
+
+# One committed change.
+node skill/council/scripts/dist/council.mjs review --commit HEAD --cwd /path/to/repo --author <codex-or-claude>
+```
+
+`--commit` uses `git show --format= --binary <ref>`. Merge commits may produce no diff with that command shape; use branch/base review when merge-commit content matters.
+
 For committed PR branches, pass the branch base explicitly:
 
 ```bash
@@ -64,9 +81,27 @@ The helper has a default reviewer timeout of 300 seconds. Override it only when 
 node skill/council/scripts/dist/council.mjs review --diff --base origin/main --cwd /path/to/repo --author <codex-or-claude> --timeout-ms 600000
 ```
 
+To limit reviewers or explicitly request the full local panel:
+
+```bash
+node skill/council/scripts/dist/council.mjs review --mode branch --base origin/main --reviewers claude --cwd /path/to/repo --author codex
+node skill/council/scripts/dist/council.mjs review --mode branch --base origin/main --panel --cwd /path/to/repo --author <codex-or-claude>
+```
+
+To run verification alongside reviewer agents and include proof in the report:
+
+```bash
+node skill/council/scripts/dist/council.mjs review --mode branch --base origin/main --parallel-tests "npm test" --test-timeout-ms 600000 --cwd /path/to/repo --author <codex-or-claude>
+```
+
+Parallel tests run in the author's real working tree, not in reviewer disposable workspaces. Choose commands that are safe for the current checkout, and account for generated files such as coverage/build output. Avoid parallel commands that aggressively create/delete files while reviewer workspaces are being prepared from the live checkout. If no diff is found, Council skips parallel tests and reports the review as incomplete.
+
+Council records the review command in its report. Do not put secrets directly in command-line arguments.
+
 3. Read the report. Treat `BLOCKER` and `QUESTION` items as needing a decision before final presentation.
    - If the result says `no reviewer agents available`, treat the artifact as unreviewed: install the opposite reviewer CLI, fix the author value, or use the manual fallback in `references/council-workflow.md`.
    - If the result says `review incomplete`, treat the artifact as unreviewed until the diff, timeout, reviewer, or empty-output problem is fixed.
+   - If `parallel tests` is `failed`, treat the closeout as incomplete until the failure is fixed or explicitly rejected as unrelated.
 4. Accept valid findings and revise the artifact or implementation yourself.
 5. Reject invalid findings explicitly with a short reason.
 6. Re-run Council after meaningful changes while the round limit allows it:

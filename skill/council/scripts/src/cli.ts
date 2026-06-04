@@ -1,6 +1,6 @@
 import { cwd as currentWorkingDirectory, env as processEnv } from "node:process";
 
-import type { Format, ReviewerId, ReviewRequest } from "./types.ts";
+import type { DiffMode, Format, ReviewerId, ReviewRequest } from "./types.ts";
 import { runReview } from "./review.ts";
 import { renderJson, renderMarkdown } from "./report.ts";
 
@@ -31,15 +31,40 @@ export function parseArgs(args: string[], env: NodeJS.ProcessEnv = processEnv): 
         break;
       case "--diff":
         request.includeDiff = true;
+        request.diffMode ??= "auto";
+        break;
+      case "--mode":
+        request.diffMode = parseDiffMode(requireValue(rest, ++i, "--mode"));
+        request.includeDiff = true;
         break;
       case "--base":
         request.baseRef = requireValue(rest, ++i, "--base");
         break;
+      case "--commit":
+        request.commitRef = requireValue(rest, ++i, "--commit");
+        request.diffMode = "commit";
+        request.includeDiff = true;
+        break;
       case "--timeout-ms":
         request.timeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--timeout-ms"), "--timeout-ms");
         break;
+      case "--test-timeout-ms":
+        request.testTimeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--test-timeout-ms"), "--test-timeout-ms");
+        break;
       case "--author":
         request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");
+        break;
+      case "--reviewers":
+        request.reviewers = parseReviewers(requireValue(rest, ++i, "--reviewers"));
+        break;
+      case "--panel":
+        request.reviewers = ["codex", "claude"];
+        break;
+      case "--parallel-tests":
+        request.parallelTests = requireValue(rest, ++i, "--parallel-tests");
+        break;
+      case "--allow-sandboxed-reviewers":
+        request.allowSandboxedReviewers = true;
         break;
       case "--max-rounds":
         request.maxRounds = parsePositiveInteger(requireValue(rest, ++i, "--max-rounds"), "--max-rounds");
@@ -65,6 +90,7 @@ export function parseArgs(args: string[], env: NodeJS.ProcessEnv = processEnv): 
   }
 
   request.author ??= parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
+  request.reviewCommand = commandLine(args);
   validateRequest(request);
   return request;
 }
@@ -98,6 +124,13 @@ function parseFormat(value: string): Format {
   throw new Error("--format must be markdown or json");
 }
 
+function parseDiffMode(value: string): DiffMode {
+  if (value === "auto" || value === "local" || value === "branch" || value === "commit") {
+    return value;
+  }
+  throw new Error("--mode must be auto, local, branch, or commit");
+}
+
 function parseAuthor(value: string | undefined, source: string): ReviewerId | undefined {
   const normalized = value?.trim();
   if (normalized === undefined || normalized === "") {
@@ -107,6 +140,22 @@ function parseAuthor(value: string | undefined, source: string): ReviewerId | un
     return normalized;
   }
   throw new Error(`${source} must be codex or claude`);
+}
+
+function parseReviewers(value: string): ReviewerId[] {
+  let parsed: ReviewerId[];
+  try {
+    parsed = value
+      .split(",")
+      .map((entry) => parseAuthor(entry, "--reviewers"))
+      .filter((entry): entry is ReviewerId => entry !== undefined);
+  } catch {
+    throw new Error("--reviewers must contain codex or claude");
+  }
+  if (parsed.length === 0) {
+    throw new Error("--reviewers must contain codex or claude");
+  }
+  return [...new Set(parsed)];
 }
 
 function validateRequest(request: ReviewRequest): void {
@@ -119,4 +168,21 @@ function validateRequest(request: ReviewRequest): void {
   if (request.round > request.maxRounds) {
     throw new Error("--round must be between 1 and --max-rounds");
   }
+  if (request.diffMode === "commit" && !request.commitRef) {
+    throw new Error("--mode commit requires --commit");
+  }
+  if (request.commitRef && request.diffMode !== "commit") {
+    throw new Error("--commit requires --mode commit");
+  }
+}
+
+function commandLine(args: string[]): string {
+  return `council ${args.map(shellToken).join(" ")}`;
+}
+
+function shellToken(value: string): string {
+  if (/^[A-Za-z0-9_./:@=-]+$/.test(value)) {
+    return value;
+  }
+  return JSON.stringify(value);
 }

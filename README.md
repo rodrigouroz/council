@@ -42,6 +42,8 @@ If Git worktrees are unavailable, Council falls back to a temporary directory co
 
 Council is not an OS sandbox. Reviewer CLIs still run as local processes with their own permission modes, so avoid putting absolute paths to the author's source checkout in prompts or artifacts when reviewer tools are broadly permitted.
 
+When Council is launched from a sandboxed Codex shell, reviewer CLIs may be unable to access their auth/session files or the network. Council blocks reviewer launch when it detects an unsafe sandboxed reviewer environment. In Codex tool calls, the agent should request `sandbox_permissions: "require_escalated"` for the Council helper command. From a human shell, start Codex with `codex --sandbox danger-full-access` when you intentionally want reviewer CLIs to run outside the sandbox; `--dangerously-bypass-approvals-and-sandbox` is broader and should only be used when you understand the risk. `--allow-sandboxed-reviewers` is an unconditional override; use it only when you have independently verified that reviewer auth is environment-based and network is available.
+
 If a report says `no reviewer agents available`, treat the artifact as unreviewed. Install the opposite reviewer CLI, correct the author value, or use the manual fallback instructions in `references/council-workflow.md`.
 
 ## Usage From Source
@@ -65,6 +67,65 @@ node skill/council/scripts/dist/council.mjs review \
   --cwd /path/to/repo \
   --author <codex-or-claude>
 ```
+
+Review explicit diff targets:
+
+```bash
+# Dirty working-tree changes only.
+node skill/council/scripts/dist/council.mjs review \
+  --mode local \
+  --cwd /path/to/repo \
+  --author <codex-or-claude>
+
+# Branch changes against a base ref, plus dirty changes when present.
+node skill/council/scripts/dist/council.mjs review \
+  --mode branch \
+  --base origin/main \
+  --cwd /path/to/repo \
+  --author <codex-or-claude>
+
+# One committed change.
+node skill/council/scripts/dist/council.mjs review \
+  --commit HEAD \
+  --cwd /path/to/repo \
+  --author <codex-or-claude>
+```
+
+`--commit` reviews the diff emitted by `git show --format= --binary <ref>`. Merge commits may produce no diff with that command shape; review the branch/base range instead when merge-commit content matters.
+
+Limit or expand the reviewer panel:
+
+```bash
+node skill/council/scripts/dist/council.mjs review \
+  --mode branch \
+  --base origin/main \
+  --reviewers claude \
+  --cwd /path/to/repo \
+  --author codex
+
+node skill/council/scripts/dist/council.mjs review \
+  --mode branch \
+  --base origin/main \
+  --panel \
+  --cwd /path/to/repo \
+  --author <codex-or-claude>
+```
+
+Run a verification command in parallel with reviewer agents and include its proof in the report:
+
+```bash
+node skill/council/scripts/dist/council.mjs review \
+  --mode branch \
+  --base origin/main \
+  --parallel-tests "npm test" \
+  --test-timeout-ms 600000 \
+  --cwd /path/to/repo \
+  --author <codex-or-claude>
+```
+
+Parallel tests run in the author's real working tree, not in reviewer disposable workspaces. Choose commands that are safe for the current checkout, or expect generated files such as coverage/build output. Because reviewer workspaces are prepared from the author's live checkout, avoid parallel commands that create/delete files aggressively during snapshotting. `--test-timeout-ms` controls the test command budget independently from reviewer `--timeout-ms`. If no diff is found, Council reports the review as incomplete and skips parallel tests.
+
+Council records the review command in its report. Avoid putting secrets or sensitive one-off paths directly in command-line arguments.
 
 Run a follow-up round:
 

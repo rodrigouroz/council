@@ -9,6 +9,10 @@ export function renderMarkdown(report: CouncilReport): string {
     `- artifact: ${report.artifact}`,
     `- reviewers: ${report.reviewers.length > 0 ? report.reviewers.join(", ") : "none"}`,
     `- result: ${reportResult(report)}`,
+    ...(report.reviewCommand ? [`- review command: ${report.reviewCommand}`] : []),
+    ...(report.testProof
+      ? [`- parallel tests: ${report.testProof.status}`, `- test command: ${report.testProof.command}`]
+      : []),
     "",
     ...findingSection("Blocking Findings", report.blockingFindings),
     "",
@@ -21,6 +25,7 @@ export function renderMarkdown(report: CouncilReport): string {
     "",
     "## Harness Notes",
     ...(report.harnessNotes.length > 0 ? report.harnessNotes.map((note) => `- ${note}`) : ["- None."]),
+    ...(report.testProof ? ["", "## Test Proof", `- ${report.testProof.status}: ${report.testProof.summary}`] : []),
     "",
     "## Author Checklist",
     "- Accept, reject, or explain each blocking finding.",
@@ -44,7 +49,8 @@ function findingSection(title: string, findings: Finding[]): string[] {
 function reportResult(report: CouncilReport): string {
   if (
     report.reviewerResults.some((result) => result.error) ||
-    report.harnessNotes.some((note) => note.startsWith("no diff found") || note.startsWith("failed to read diff"))
+    report.testProof?.status === "failed" ||
+    report.harnessNotes.some(isIncompleteHarnessNote)
   ) {
     return "review incomplete";
   }
@@ -52,4 +58,13 @@ function reportResult(report: CouncilReport): string {
     return "no reviewer agents available";
   }
   return report.nextRoundRecommended ? "next round recommended" : "no blocking findings";
+}
+
+function isIncompleteHarnessNote(note: string): boolean {
+  return (
+    note.startsWith("no diff found") ||
+    note.startsWith("failed to read diff") ||
+    note.startsWith("--mode ") ||
+    note.startsWith("reviewer launch blocked")
+  );
 }

@@ -15,12 +15,21 @@ export interface RunReviewerRequest {
   timeoutMs?: number;
 }
 
-export function discoverReviewers(env: NodeJS.ProcessEnv = process.env, author?: ReviewerId): Discovery {
+export function discoverReviewers(
+  env: NodeJS.ProcessEnv = process.env,
+  author?: ReviewerId,
+  selectedReviewers?: ReviewerId[],
+): Discovery {
   const reviewers: Reviewer[] = [];
   const warnings: string[] = [];
+  const selected = selectedReviewers ? new Set(selectedReviewers) : undefined;
   for (const candidate of supportedReviewers) {
     if (candidate.id === author) {
       warnings.push(`reviewer ${candidate.id} skipped: matches authoring agent`);
+      continue;
+    }
+    if (selected && !selected.has(candidate.id)) {
+      warnings.push(`reviewer ${candidate.id} skipped: not selected`);
       continue;
     }
     const executable = findExecutable(candidate.executable, env);

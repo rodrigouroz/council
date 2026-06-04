@@ -56,7 +56,7 @@ function runProcess(command, args, options) {
         resolve({ stdout, stderr });
         return;
       }
-      reject(new Error(`${command} exited with code ${code}: ${stderr.trim()}`));
+      reject(new Error(failedProcessMessage(command, code, stdout, stderr)));
     });
     if (options.input !== void 0) {
       child.stdin.end(options.input);
@@ -65,18 +65,79 @@ function runProcess(command, args, options) {
     }
   });
 }
+function runShellCommand(command, options) {
+  return new Promise((resolve, reject) => {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const child = spawn(command, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      shell: true,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      setTimeout(() => {
+        child.kill("SIGKILL");
+      }, 2e3).unref();
+      reject(new Error(`timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+        return;
+      }
+      reject(new Error(failedProcessMessage(command, code, stdout, stderr)));
+    });
+    if (options.input !== void 0) {
+      child.stdin.end(options.input);
+    } else {
+      child.stdin.end();
+    }
+  });
+}
+function failedProcessMessage(command, code, stdout, stderr) {
+  const diagnostic = stderr.trim() || stdout.trim();
+  return `${command} exited with code ${code}: ${diagnostic}`;
+}
 
 // src/agents.ts
 var supportedReviewers = [
   { id: "codex", executable: "codex" },
   { id: "claude", executable: "claude" }
 ];
-function discoverReviewers(env = process.env, author) {
+function discoverReviewers(env = process.env, author, selectedReviewers) {
   const reviewers = [];
   const warnings = [];
+  const selected = selectedReviewers ? new Set(selectedReviewers) : void 0;
   for (const candidate of supportedReviewers) {
     if (candidate.id === author) {
       warnings.push(`reviewer ${candidate.id} skipped: matches authoring agent`);
+      continue;
+    }
+    if (selected && !selected.has(candidate.id)) {
+      warnings.push(`reviewer ${candidate.id} skipped: not selected`);
       continue;
     }
     const executable = findExecutable(candidate.executable, env);
@@ -259,7 +320,7 @@ function safeSegment(input) {
 
 // src/review.ts
 async function runReview(request) {
-  const discovery = discoverReviewers(process.env, request.author);
+  const discovery = discoverReviewers(process.env, request.author, request.reviewers);
   const report = {
     round: request.round,
     maxRounds: request.maxRounds,
@@ -268,9 +329,10 @@ async function runReview(request) {
     blockingFindings: [],
     suggestions: [],
     questions: [],
-    harnessNotes: [...discovery.warnings],
+    harnessNotes: [...sandboxHarnessNotes(process.env), ...discovery.warnings],
     reviewerResults: [],
-    nextRoundRecommended: false
+    nextRoundRecommended: false,
+    reviewCommand: request.reviewCommand
   };
   const artifact = await readArtifact(request);
   const diffResult = await readReviewDiff(request);
@@ -278,13 +340,27 @@ async function runReview(request) {
   if (request.includeDiff && !diffResult.diff) {
     return report;
   }
-  if (discovery.reviewers.length === 0) {
-    report.harnessNotes.push("no reviewer agents available");
+  const testProofPromise = request.parallelTests ? runParallelTests(request) : Promise.resolve(void 0);
+  if (shouldBlockSandboxedReviewers(process.env, request, discovery.reviewers)) {
+    report.harnessNotes.push(
+      sandboxReviewerBlockedNote()
+    );
+    report.reviewers = [];
+    report.testProof = await testProofPromise;
+    appendTestProofNotes(report);
     return report;
   }
-  const reviewerResults = await Promise.all(
-    discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff))
-  );
+  if (discovery.reviewers.length === 0) {
+    report.harnessNotes.push("no reviewer agents available");
+    report.testProof = await testProofPromise;
+    appendTestProofNotes(report);
+    return report;
+  }
+  const [reviewerResults, testProof] = await Promise.all([
+    Promise.all(discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff))),
+    testProofPromise
+  ]);
+  report.testProof = testProof;
   for (const [index, result] of reviewerResults.entries()) {
     const reviewer = discovery.reviewers[index];
     report.reviewerResults.push(result);
@@ -298,8 +374,38 @@ async function runReview(request) {
       report.harnessNotes.push(`reviewer ${reviewer.id} left workspace changes: ${result.workspaceStatus}`);
     }
   }
-  report.nextRoundRecommended = report.blockingFindings.length > 0 || report.questions.length > 0 || report.reviewerResults.some((result) => result.error);
+  appendTestProofNotes(report);
+  report.nextRoundRecommended = report.blockingFindings.length > 0 || report.questions.length > 0 || report.reviewerResults.some((result) => result.error) || report.testProof?.status === "failed";
   return report;
+}
+function shouldBlockSandboxedReviewers(env, request, reviewers) {
+  if (!env.CODEX_SANDBOX || reviewers.length === 0 || request.allowSandboxedReviewers) {
+    return false;
+  }
+  if (env.CODEX_SANDBOX_NETWORK_DISABLED === "1") {
+    return true;
+  }
+  return !reviewers.every((reviewer) => reviewerHasEnvAuth(env, reviewer.id));
+}
+function reviewerHasEnvAuth(env, reviewer) {
+  if (reviewer === "claude") {
+    return Boolean(env.ANTHROPIC_API_KEY);
+  }
+  if (reviewer === "codex") {
+    return Boolean(env.OPENAI_API_KEY);
+  }
+  return false;
+}
+function sandboxReviewerBlockedNote() {
+  return "reviewer launch blocked: Council is running inside a Codex sandbox without reviewer-safe auth/network. Rerun the Council helper outside the sandbox. In Codex tool calls, use sandbox_permissions=require_escalated; from a shell, use codex --sandbox danger-full-access or --dangerously-bypass-approvals-and-sandbox only when you understand the risk. --allow-sandboxed-reviewers is an unconditional override; use it only after independently verifying reviewer auth is environment-based and network is available.";
+}
+function sandboxHarnessNotes(env) {
+  const sandbox = env.CODEX_SANDBOX;
+  if (!sandbox) return [];
+  const networkNote = env.CODEX_SANDBOX_NETWORK_DISABLED === "1" ? " with network disabled" : "";
+  return [
+    `running inside CODEX_SANDBOX=${sandbox}${networkNote}; reviewer CLIs may be unable to access auth, home state, or network unless reviewer auth is environment-based and network is available.`
+  ];
 }
 function buildPrompt(input) {
   return `You are a Council reviewer. Review the artifact and repository context. Use tools as needed inside this disposable workspace. Do not intentionally modify source; if tools generate state, the harness will discard this workspace.
@@ -336,13 +442,14 @@ function parseReviewerOutput(reviewer, output) {
   let currentFinding;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
-    const upper = line.toUpperCase();
+    const findingLine = normalizeFindingLine(line);
+    const upper = findingLine.toUpperCase();
     if (upper.startsWith("BLOCKER:")) {
-      currentFinding = pushFinding(result.blockingFindings, reviewer, line.slice("BLOCKER:".length));
+      currentFinding = pushFinding(result.blockingFindings, reviewer, findingLine.slice("BLOCKER:".length));
     } else if (upper.startsWith("SUGGESTION:")) {
-      currentFinding = pushFinding(result.suggestions, reviewer, line.slice("SUGGESTION:".length));
+      currentFinding = pushFinding(result.suggestions, reviewer, findingLine.slice("SUGGESTION:".length));
     } else if (upper.startsWith("QUESTION:")) {
-      currentFinding = pushFinding(result.questions, reviewer, line.slice("QUESTION:".length));
+      currentFinding = pushFinding(result.questions, reviewer, findingLine.slice("QUESTION:".length));
     } else if (upper.startsWith("PASS:")) {
       result.pass = true;
       currentFinding = void 0;
@@ -354,6 +461,21 @@ ${rawLine}`;
     }
   }
   return result;
+}
+function normalizeFindingLine(line) {
+  let normalized = line.replace(/^[-+*]\s+/, "").trim();
+  normalized = normalized.replace(/^\d+[.)]\s+(?=(?:\*\*|__))/, "").trim();
+  normalized = normalized.replace(/^>\s*/, "").trim();
+  normalized = normalized.replace(
+    /^(?:\*\*|__)(BLOCKER|SUGGESTION|QUESTION|PASS)(?::)?(?:\*\*|__):?\s*/i,
+    (_match, prefix) => `${prefix.toUpperCase()}: `
+  );
+  for (const marker of ["**", "__"]) {
+    if (normalized.startsWith(marker) && normalized.endsWith(marker)) {
+      normalized = normalized.slice(marker.length, -marker.length);
+    }
+  }
+  return normalized.trim();
 }
 async function runOneReviewer(reviewer, request, artifact, diff) {
   const prepared = await prepareWorkspace({
@@ -404,8 +526,25 @@ async function readArtifact(request) {
 async function readReviewDiff(request) {
   if (!request.includeDiff) return { diff: "", harnessNotes: [] };
   try {
+    const mode = request.diffMode ?? "auto";
+    if (mode === "local") {
+      const diff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
+      const harnessNotes = ignoredBaseNotes(request, "--mode local");
+      return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, "no diff found in local working tree"] };
+    }
+    if (mode === "commit") {
+      if (!request.commitRef) {
+        return { diff: "", harnessNotes: ["--mode commit requires --commit"] };
+      }
+      const diff = await gitStdout(request.cwd, ["show", "--format=", "--binary", request.commitRef, "--"]);
+      const harnessNotes = ignoredBaseNotes(request, `--commit ${request.commitRef}`);
+      return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, `no diff found for commit ${request.commitRef}`] };
+    }
     const dirtyDiff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
     const baseRef = request.baseRef ?? await readUpstreamRef(request.cwd);
+    if (mode === "branch" && !baseRef) {
+      return { diff: "", harnessNotes: ["--mode branch requires --base or an upstream ref"] };
+    }
     if (baseRef) {
       const mergeBase = await gitStdout(request.cwd, ["merge-base", baseRef, "HEAD"]);
       const committedDiff = await gitStdout(request.cwd, ["diff", "--binary", `${mergeBase}...HEAD`, "--"]);
@@ -443,6 +582,37 @@ ${dirtyDiff}`,
     };
   }
 }
+function ignoredBaseNotes(request, target) {
+  return request.baseRef ? [`--base ${request.baseRef} ignored by ${target}`] : [];
+}
+async function runParallelTests(request) {
+  const command = request.parallelTests;
+  try {
+    const result = await runShellCommand(command, { cwd: request.cwd, timeoutMs: request.testTimeoutMs ?? request.timeoutMs });
+    return {
+      command,
+      status: "passed",
+      summary: summarizeOutput(result.stdout, result.stderr) || "command exited with code 0"
+    };
+  } catch (error) {
+    return {
+      command,
+      status: "failed",
+      summary: summarizeOutput("", error.message) || error.message.slice(0, 500)
+    };
+  }
+}
+function appendTestProofNotes(report) {
+  if (report.testProof?.status === "failed") {
+    report.harnessNotes.push(`parallel tests failed: ${report.testProof.summary}`);
+  }
+}
+function summarizeOutput(stdout, stderr) {
+  return [...lastNonEmptyLines(stdout, 2), ...lastNonEmptyLines(stderr, 2)].join(" | ").slice(0, 500);
+}
+function lastNonEmptyLines(output, count) {
+  return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-count);
+}
 async function gitStdout(cwd, args) {
   const { stdout } = await runProcess("git", args, { cwd });
   return stdout.trimEnd();
@@ -467,7 +637,16 @@ function artifactLabel(request) {
   return request.includeDiff ? "git diff" : request.artifactPath ?? "";
 }
 function finding(reviewer, text) {
-  return { reviewer, text: text.trim() };
+  return { reviewer, text: cleanFindingText(text) };
+}
+function cleanFindingText(text) {
+  let cleaned = text.trim();
+  for (const marker of ["**", "__"]) {
+    if (cleaned.startsWith(marker) && cleaned.endsWith(marker)) {
+      cleaned = cleaned.slice(marker.length, -marker.length);
+    }
+  }
+  return cleaned.trim();
 }
 function pushFinding(target, reviewer, text) {
   const entry = finding(reviewer, text);
@@ -485,6 +664,8 @@ function renderMarkdown(report) {
     `- artifact: ${report.artifact}`,
     `- reviewers: ${report.reviewers.length > 0 ? report.reviewers.join(", ") : "none"}`,
     `- result: ${reportResult(report)}`,
+    ...report.reviewCommand ? [`- review command: ${report.reviewCommand}`] : [],
+    ...report.testProof ? [`- parallel tests: ${report.testProof.status}`, `- test command: ${report.testProof.command}`] : [],
     "",
     ...findingSection("Blocking Findings", report.blockingFindings),
     "",
@@ -497,6 +678,7 @@ function renderMarkdown(report) {
     "",
     "## Harness Notes",
     ...report.harnessNotes.length > 0 ? report.harnessNotes.map((note) => `- ${note}`) : ["- None."],
+    ...report.testProof ? ["", "## Test Proof", `- ${report.testProof.status}: ${report.testProof.summary}`] : [],
     "",
     "## Author Checklist",
     "- Accept, reject, or explain each blocking finding.",
@@ -516,13 +698,16 @@ function findingSection(title, findings) {
   return [`## ${title}`, ...findings.map((finding2) => `- ${finding2.reviewer}: ${finding2.text}`)];
 }
 function reportResult(report) {
-  if (report.reviewerResults.some((result) => result.error) || report.harnessNotes.some((note) => note.startsWith("no diff found") || note.startsWith("failed to read diff"))) {
+  if (report.reviewerResults.some((result) => result.error) || report.testProof?.status === "failed" || report.harnessNotes.some(isIncompleteHarnessNote)) {
     return "review incomplete";
   }
   if (report.reviewers.length === 0) {
     return "no reviewer agents available";
   }
   return report.nextRoundRecommended ? "next round recommended" : "no blocking findings";
+}
+function isIncompleteHarnessNote(note) {
+  return note.startsWith("no diff found") || note.startsWith("failed to read diff") || note.startsWith("--mode ") || note.startsWith("reviewer launch blocked");
 }
 
 // src/cli.ts
@@ -551,15 +736,40 @@ function parseArgs(args, env = processEnv) {
         break;
       case "--diff":
         request.includeDiff = true;
+        request.diffMode ??= "auto";
+        break;
+      case "--mode":
+        request.diffMode = parseDiffMode(requireValue(rest, ++i, "--mode"));
+        request.includeDiff = true;
         break;
       case "--base":
         request.baseRef = requireValue(rest, ++i, "--base");
         break;
+      case "--commit":
+        request.commitRef = requireValue(rest, ++i, "--commit");
+        request.diffMode = "commit";
+        request.includeDiff = true;
+        break;
       case "--timeout-ms":
         request.timeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--timeout-ms"), "--timeout-ms");
         break;
+      case "--test-timeout-ms":
+        request.testTimeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--test-timeout-ms"), "--test-timeout-ms");
+        break;
       case "--author":
         request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");
+        break;
+      case "--reviewers":
+        request.reviewers = parseReviewers(requireValue(rest, ++i, "--reviewers"));
+        break;
+      case "--panel":
+        request.reviewers = ["codex", "claude"];
+        break;
+      case "--parallel-tests":
+        request.parallelTests = requireValue(rest, ++i, "--parallel-tests");
+        break;
+      case "--allow-sandboxed-reviewers":
+        request.allowSandboxedReviewers = true;
         break;
       case "--max-rounds":
         request.maxRounds = parsePositiveInteger(requireValue(rest, ++i, "--max-rounds"), "--max-rounds");
@@ -584,6 +794,7 @@ function parseArgs(args, env = processEnv) {
     }
   }
   request.author ??= parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
+  request.reviewCommand = commandLine(args);
   validateRequest(request);
   return request;
 }
@@ -612,6 +823,12 @@ function parseFormat(value) {
   }
   throw new Error("--format must be markdown or json");
 }
+function parseDiffMode(value) {
+  if (value === "auto" || value === "local" || value === "branch" || value === "commit") {
+    return value;
+  }
+  throw new Error("--mode must be auto, local, branch, or commit");
+}
 function parseAuthor(value, source) {
   const normalized = value?.trim();
   if (normalized === void 0 || normalized === "") {
@@ -621,6 +838,18 @@ function parseAuthor(value, source) {
     return normalized;
   }
   throw new Error(`${source} must be codex or claude`);
+}
+function parseReviewers(value) {
+  let parsed;
+  try {
+    parsed = value.split(",").map((entry) => parseAuthor(entry, "--reviewers")).filter((entry) => entry !== void 0);
+  } catch {
+    throw new Error("--reviewers must contain codex or claude");
+  }
+  if (parsed.length === 0) {
+    throw new Error("--reviewers must contain codex or claude");
+  }
+  return [...new Set(parsed)];
 }
 function validateRequest(request) {
   if (!request.artifactPath && !request.includeDiff) {
@@ -632,6 +861,21 @@ function validateRequest(request) {
   if (request.round > request.maxRounds) {
     throw new Error("--round must be between 1 and --max-rounds");
   }
+  if (request.diffMode === "commit" && !request.commitRef) {
+    throw new Error("--mode commit requires --commit");
+  }
+  if (request.commitRef && request.diffMode !== "commit") {
+    throw new Error("--commit requires --mode commit");
+  }
+}
+function commandLine(args) {
+  return `council ${args.map(shellToken).join(" ")}`;
+}
+function shellToken(value) {
+  if (/^[A-Za-z0-9_./:@=-]+$/.test(value)) {
+    return value;
+  }
+  return JSON.stringify(value);
 }
 
 // src/main.ts

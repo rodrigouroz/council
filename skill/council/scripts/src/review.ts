@@ -2,8 +2,8 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { discoverReviewers, runReviewer } from "./agents.ts";
-import { runProcess } from "./process.ts";
-import type { CouncilReport, Finding, ReviewRequest, Reviewer, ReviewerResult } from "./types.ts";
+import { runProcess, runShellCommand } from "./process.ts";
+import type { CouncilReport, DiffMode, Finding, ReviewRequest, Reviewer, ReviewerResult, TestProof } from "./types.ts";
 import { prepareWorkspace } from "./workspace.ts";
 
 export interface PromptInput {
@@ -19,7 +19,9 @@ export interface PromptInput {
 export interface DiffReadRequest {
   cwd: string;
   includeDiff: boolean;
+  diffMode?: DiffMode;
   baseRef?: string;
+  commitRef?: string;
 }
 
 export interface DiffReadResult {
@@ -28,7 +30,7 @@ export interface DiffReadResult {
 }
 
 export async function runReview(request: ReviewRequest): Promise<CouncilReport> {
-  const discovery = discoverReviewers(process.env, request.author);
+  const discovery = discoverReviewers(process.env, request.author, request.reviewers);
   const report: CouncilReport = {
     round: request.round,
     maxRounds: request.maxRounds,
@@ -37,9 +39,10 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
     blockingFindings: [],
     suggestions: [],
     questions: [],
-    harnessNotes: [...discovery.warnings],
+    harnessNotes: [...sandboxHarnessNotes(process.env), ...discovery.warnings],
     reviewerResults: [],
     nextRoundRecommended: false,
+    reviewCommand: request.reviewCommand,
   };
 
   const artifact = await readArtifact(request);
@@ -48,14 +51,28 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
   if (request.includeDiff && !diffResult.diff) {
     return report;
   }
+  const testProofPromise = request.parallelTests ? runParallelTests(request) : Promise.resolve(undefined);
+  if (shouldBlockSandboxedReviewers(process.env, request, discovery.reviewers)) {
+    report.harnessNotes.push(
+      sandboxReviewerBlockedNote(),
+    );
+    report.reviewers = [];
+    report.testProof = await testProofPromise;
+    appendTestProofNotes(report);
+    return report;
+  }
   if (discovery.reviewers.length === 0) {
     report.harnessNotes.push("no reviewer agents available");
+    report.testProof = await testProofPromise;
+    appendTestProofNotes(report);
     return report;
   }
 
-  const reviewerResults = await Promise.all(
-    discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff)),
-  );
+  const [reviewerResults, testProof] = await Promise.all([
+    Promise.all(discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff))),
+    testProofPromise,
+  ]);
+  report.testProof = testProof;
   for (const [index, result] of reviewerResults.entries()) {
     const reviewer = discovery.reviewers[index]!;
     report.reviewerResults.push(result);
@@ -69,10 +86,51 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
       report.harnessNotes.push(`reviewer ${reviewer.id} left workspace changes: ${result.workspaceStatus}`);
     }
   }
+  appendTestProofNotes(report);
 
   report.nextRoundRecommended =
-    report.blockingFindings.length > 0 || report.questions.length > 0 || report.reviewerResults.some((result) => result.error);
+    report.blockingFindings.length > 0 ||
+    report.questions.length > 0 ||
+    report.reviewerResults.some((result) => result.error) ||
+    report.testProof?.status === "failed";
   return report;
+}
+
+function shouldBlockSandboxedReviewers(
+  env: NodeJS.ProcessEnv,
+  request: ReviewRequest,
+  reviewers: Reviewer[],
+): boolean {
+  if (!env.CODEX_SANDBOX || reviewers.length === 0 || request.allowSandboxedReviewers) {
+    return false;
+  }
+  if (env.CODEX_SANDBOX_NETWORK_DISABLED === "1") {
+    return true;
+  }
+  return !reviewers.every((reviewer) => reviewerHasEnvAuth(env, reviewer.id));
+}
+
+function reviewerHasEnvAuth(env: NodeJS.ProcessEnv, reviewer: string): boolean {
+  if (reviewer === "claude") {
+    return Boolean(env.ANTHROPIC_API_KEY);
+  }
+  if (reviewer === "codex") {
+    return Boolean(env.OPENAI_API_KEY);
+  }
+  return false;
+}
+
+function sandboxReviewerBlockedNote(): string {
+  return "reviewer launch blocked: Council is running inside a Codex sandbox without reviewer-safe auth/network. Rerun the Council helper outside the sandbox. In Codex tool calls, use sandbox_permissions=require_escalated; from a shell, use codex --sandbox danger-full-access or --dangerously-bypass-approvals-and-sandbox only when you understand the risk. --allow-sandboxed-reviewers is an unconditional override; use it only after independently verifying reviewer auth is environment-based and network is available.";
+}
+
+export function sandboxHarnessNotes(env: NodeJS.ProcessEnv): string[] {
+  const sandbox = env.CODEX_SANDBOX;
+  if (!sandbox) return [];
+  const networkNote = env.CODEX_SANDBOX_NETWORK_DISABLED === "1" ? " with network disabled" : "";
+  return [
+    `running inside CODEX_SANDBOX=${sandbox}${networkNote}; reviewer CLIs may be unable to access auth, home state, or network unless reviewer auth is environment-based and network is available.`,
+  ];
 }
 
 export function buildPrompt(input: PromptInput): string {
@@ -111,13 +169,14 @@ export function parseReviewerOutput(reviewer: string, output: string): ReviewerR
   let currentFinding: Finding | undefined;
   for (const rawLine of output.split(/\r?\n/)) {
     const line = rawLine.trim();
-    const upper = line.toUpperCase();
+    const findingLine = normalizeFindingLine(line);
+    const upper = findingLine.toUpperCase();
     if (upper.startsWith("BLOCKER:")) {
-      currentFinding = pushFinding(result.blockingFindings, reviewer, line.slice("BLOCKER:".length));
+      currentFinding = pushFinding(result.blockingFindings, reviewer, findingLine.slice("BLOCKER:".length));
     } else if (upper.startsWith("SUGGESTION:")) {
-      currentFinding = pushFinding(result.suggestions, reviewer, line.slice("SUGGESTION:".length));
+      currentFinding = pushFinding(result.suggestions, reviewer, findingLine.slice("SUGGESTION:".length));
     } else if (upper.startsWith("QUESTION:")) {
-      currentFinding = pushFinding(result.questions, reviewer, line.slice("QUESTION:".length));
+      currentFinding = pushFinding(result.questions, reviewer, findingLine.slice("QUESTION:".length));
     } else if (upper.startsWith("PASS:")) {
       result.pass = true;
       currentFinding = undefined;
@@ -128,6 +187,22 @@ export function parseReviewerOutput(reviewer: string, output: string): ReviewerR
     }
   }
   return result;
+}
+
+function normalizeFindingLine(line: string): string {
+  let normalized = line.replace(/^[-+*]\s+/, "").trim();
+  normalized = normalized.replace(/^\d+[.)]\s+(?=(?:\*\*|__))/, "").trim();
+  normalized = normalized.replace(/^>\s*/, "").trim();
+  normalized = normalized.replace(
+    /^(?:\*\*|__)(BLOCKER|SUGGESTION|QUESTION|PASS)(?::)?(?:\*\*|__):?\s*/i,
+    (_match, prefix: string) => `${prefix.toUpperCase()}: `,
+  );
+  for (const marker of ["**", "__"]) {
+    if (normalized.startsWith(marker) && normalized.endsWith(marker)) {
+      normalized = normalized.slice(marker.length, -marker.length);
+    }
+  }
+  return normalized.trim();
 }
 
 async function runOneReviewer(
@@ -186,8 +261,25 @@ async function readArtifact(request: ReviewRequest): Promise<string> {
 export async function readReviewDiff(request: DiffReadRequest): Promise<DiffReadResult> {
   if (!request.includeDiff) return { diff: "", harnessNotes: [] };
   try {
+    const mode = request.diffMode ?? "auto";
+    if (mode === "local") {
+      const diff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
+      const harnessNotes = ignoredBaseNotes(request, "--mode local");
+      return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, "no diff found in local working tree"] };
+    }
+    if (mode === "commit") {
+      if (!request.commitRef) {
+        return { diff: "", harnessNotes: ["--mode commit requires --commit"] };
+      }
+      const diff = await gitStdout(request.cwd, ["show", "--format=", "--binary", request.commitRef, "--"]);
+      const harnessNotes = ignoredBaseNotes(request, `--commit ${request.commitRef}`);
+      return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, `no diff found for commit ${request.commitRef}`] };
+    }
     const dirtyDiff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
     const baseRef = request.baseRef ?? (await readUpstreamRef(request.cwd));
+    if (mode === "branch" && !baseRef) {
+      return { diff: "", harnessNotes: ["--mode branch requires --base or an upstream ref"] };
+    }
     if (baseRef) {
       const mergeBase = await gitStdout(request.cwd, ["merge-base", baseRef, "HEAD"]);
       const committedDiff = await gitStdout(request.cwd, ["diff", "--binary", `${mergeBase}...HEAD`, "--"]);
@@ -225,6 +317,46 @@ export async function readReviewDiff(request: DiffReadRequest): Promise<DiffRead
   }
 }
 
+function ignoredBaseNotes(request: DiffReadRequest, target: string): string[] {
+  return request.baseRef ? [`--base ${request.baseRef} ignored by ${target}`] : [];
+}
+
+async function runParallelTests(request: ReviewRequest): Promise<TestProof> {
+  const command = request.parallelTests!;
+  try {
+    const result = await runShellCommand(command, { cwd: request.cwd, timeoutMs: request.testTimeoutMs ?? request.timeoutMs });
+    return {
+      command,
+      status: "passed",
+      summary: summarizeOutput(result.stdout, result.stderr) || "command exited with code 0",
+    };
+  } catch (error) {
+    return {
+      command,
+      status: "failed",
+      summary: summarizeOutput("", (error as Error).message) || (error as Error).message.slice(0, 500),
+    };
+  }
+}
+
+function appendTestProofNotes(report: CouncilReport): void {
+  if (report.testProof?.status === "failed") {
+    report.harnessNotes.push(`parallel tests failed: ${report.testProof.summary}`);
+  }
+}
+
+function summarizeOutput(stdout: string, stderr: string): string {
+  return [...lastNonEmptyLines(stdout, 2), ...lastNonEmptyLines(stderr, 2)].join(" | ").slice(0, 500);
+}
+
+function lastNonEmptyLines(output: string, count: number): string[] {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-count);
+}
+
 async function gitStdout(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await runProcess("git", args, { cwd });
   return stdout.trimEnd();
@@ -260,7 +392,17 @@ function artifactLabel(request: ReviewRequest): string {
 }
 
 function finding(reviewer: string, text: string): Finding {
-  return { reviewer, text: text.trim() };
+  return { reviewer, text: cleanFindingText(text) };
+}
+
+function cleanFindingText(text: string): string {
+  let cleaned = text.trim();
+  for (const marker of ["**", "__"]) {
+    if (cleaned.startsWith(marker) && cleaned.endsWith(marker)) {
+      cleaned = cleaned.slice(marker.length, -marker.length);
+    }
+  }
+  return cleaned.trim();
 }
 
 function pushFinding(target: Finding[], reviewer: string, text: string): Finding {

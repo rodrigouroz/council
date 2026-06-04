@@ -1,18 +1,27 @@
 export type Format = "markdown" | "json";
+export type DiffMode = "auto" | "local" | "branch" | "commit";
 export type ReviewerId = "codex" | "claude";
+export type TestProofStatus = "passed" | "failed";
 
 export interface ReviewRequest {
   command: "review";
   cwd: string;
   artifactPath?: string;
   includeDiff: boolean;
+  diffMode?: DiffMode;
   baseRef?: string;
+  commitRef?: string;
   timeoutMs?: number;
+  testTimeoutMs?: number;
   author?: ReviewerId;
+  reviewers?: ReviewerId[];
+  allowSandboxedReviewers?: boolean;
+  parallelTests?: string;
   maxRounds: number;
   round: number;
   changeSummary: string;
   format: Format;
+  reviewCommand?: string;
 }
 
 export interface Reviewer {
@@ -52,4 +61,12 @@ export interface CouncilReport {
   harnessNotes: string[];
   reviewerResults: ReviewerResult[];
   nextRoundRecommended: boolean;
+  reviewCommand?: string;
+  testProof?: TestProof;
+}
+
+export interface TestProof {
+  command: string;
+  status: TestProofStatus;
+  summary: string;
 }

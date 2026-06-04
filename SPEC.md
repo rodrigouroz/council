@@ -96,6 +96,9 @@ Initial commands:
 ```bash
 node skill/council/scripts/dist/council.mjs review --artifact /path/to/artifact.md --cwd /path/to/repo
 node skill/council/scripts/dist/council.mjs review --diff --cwd /path/to/repo
+node skill/council/scripts/dist/council.mjs review --mode local --cwd /path/to/repo
+node skill/council/scripts/dist/council.mjs review --mode branch --base origin/main --cwd /path/to/repo
+node skill/council/scripts/dist/council.mjs review --commit HEAD --cwd /path/to/repo
 node skill/council/scripts/dist/council.mjs review --artifact /path/to/artifact.md --cwd /path/to/repo --max-rounds 3
 ```
 
@@ -108,11 +111,18 @@ Defaults:
 - If both are set, `--author` takes precedence over `COUNCIL_AUTHOR_AGENT`.
 - When an author is known, reviewers default to every available supported agent except the authoring agent.
 - When no author is known, reviewers default to every available supported agent.
+- `--reviewers codex,claude` limits the reviewer set; unavailable or author-matching reviewers are still skipped with visible warnings.
+- `--panel` is a shorthand for all supported reviewers and is useful when an agent wants to be explicit about convening the full local panel.
+- `--parallel-tests "<command>"` starts a verification command alongside reviewer agents and records the command, status, and compact output proof in the report.
+- `--test-timeout-ms <milliseconds>` controls the parallel test command timeout. If omitted, parallel tests use `--timeout-ms`.
+- `--allow-sandboxed-reviewers` unconditionally permits reviewer launch inside a Codex sandbox; use it only after independently verifying reviewer auth is environment-based and network is available.
 - Output defaults to Markdown.
 - `--json` emits JSON.
-- Report `result` values are `no blocking findings`, `next round recommended`, and `no reviewer agents available`.
+- Report `result` values are `no blocking findings`, `next round recommended`, `no reviewer agents available`, and `review incomplete`.
 
 The helper should avoid user-facing review modes such as `artifact-only`, `read-only`, or `verify`. Reviewers get a simple instruction: use the tools needed to review well, but do not intentionally modify source. The harness isolates ordinary cwd-relative writes through disposable workspaces and reports mutations it observes.
+
+When the helper detects `CODEX_SANDBOX`, it should not launch reviewer CLIs if network is disabled or if selected reviewers appear to depend on home-directory auth. It should return `review incomplete`, keep parallel test proof when requested, and tell Codex agents to rerun the helper with escalated sandbox permissions. If reviewer auth is environment-based and network is available, reviewer launch is permitted. `--allow-sandboxed-reviewers` bypasses this guard unconditionally and is intended only for users who have independently verified the sandboxed reviewer environment.
 
 ## Reviewer Agents
 
@@ -133,6 +143,22 @@ Discovery should be simple:
 - Allow explicit reviewer selection later, but default to all available reviewers.
 
 Reviewer invocation should use each agent's local CLI. The helper should run one-shot reviewer calls, not persistent sessions.
+
+## Diff Closeout Modes
+
+Council keeps `--diff` as the backward-compatible automatic mode. It reads dirty working-tree changes and, when `--base` or an upstream ref is available, committed branch changes against that base.
+
+For closeout review, agents can choose a narrower target:
+
+- `--mode local` reviews dirty working-tree changes only.
+- `--mode branch --base <ref>` reviews branch changes against the base ref and appends dirty working-tree changes when present.
+- `--commit <ref>` reviews one committed change with `git show --format= --binary <ref>`.
+
+If no diff is found, the report is incomplete, not a clean pass.
+
+Parallel tests run in the author's real working tree, not in reviewer disposable workspaces. This is intentional because verification commands often need the exact checkout being closed out, but it means generated test/build/coverage files are the author's responsibility. Since reviewer workspaces are prepared from the author's live checkout, parallel commands should not aggressively create/delete files during snapshotting. Council skips parallel tests when no diff is found because there is no review target.
+
+Council records the review command in reports for closeout traceability. Users and agents should avoid putting secrets directly in command-line arguments.
 
 Known local command shapes as of this spec:
 

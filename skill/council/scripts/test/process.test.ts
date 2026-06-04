@@ -18,3 +18,15 @@ test("runProcess rejects when the child exceeds the timeout", async () => {
     /timed out after 20ms/,
   );
 });
+
+test("runProcess includes stdout diagnostics when stderr is empty", async () => {
+  await assert.rejects(
+    () =>
+      runProcess(
+        process.execPath,
+        ["-e", "console.log('Not logged in'); process.exit(1)"],
+        { cwd: process.cwd() },
+      ),
+    /Not logged in/,
+  );
+});

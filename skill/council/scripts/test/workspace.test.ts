@@ -20,6 +20,7 @@ async function initRepo(): Promise<string> {
   await git(dir, ["init"]);
   await git(dir, ["config", "user.email", "council@example.test"]);
   await git(dir, ["config", "user.name", "Council Test"]);
+  await git(dir, ["config", "commit.gpgsign", "false"]);
   await writeFile(path.join(dir, "tracked.txt"), "base\n");
   await git(dir, ["add", "."]);
   await git(dir, ["commit", "-m", "initial"]);

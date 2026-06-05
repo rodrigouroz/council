@@ -14,26 +14,49 @@ import path from "node:path";
 // src/process.ts
 import { spawn } from "node:child_process";
 var DEFAULT_TIMEOUT_MS = 3e5;
+var KILL_ESCALATION_MS = 2e3;
 function runProcess(command, args, options) {
+  return runChild(command, args, false, options);
+}
+function runShellCommand(command, options) {
+  return runChild(command, [], true, options);
+}
+function runChild(command, args, shell, options) {
   return new Promise((resolve, reject) => {
     const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
-      stdio: ["pipe", "pipe", "pipe"]
+      shell,
+      stdio: ["pipe", "pipe", "pipe"],
+      // Own process group (POSIX) so a timeout/abort can terminate the whole
+      // tree, including shell grandchildren such as `npm test` workers.
+      detached: process.platform !== "win32"
     });
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        child.kill("SIGKILL");
-      }, 2e3).unref();
-      reject(new Error(`timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
+    let killReason;
+    let escalation;
+    const signal = options.signal;
+    const terminate = (reason) => {
+      if (settled || killReason) return;
+      killReason = reason;
+      killTree(child, "SIGTERM");
+      escalation = setTimeout(() => killTree(child, "SIGKILL"), KILL_ESCALATION_MS);
+      escalation.unref();
+    };
+    const onAbort = () => terminate("abort");
+    const timer = setTimeout(() => terminate("timeout"), timeoutMs);
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (escalation) clearTimeout(escalation);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    if (signal) {
+      if (signal.aborted) terminate("abort");
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
@@ -45,13 +68,21 @@ function runProcess(command, args, options) {
     child.on("error", (error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
       reject(error);
     });
     child.on("close", (code) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      cleanup();
+      if (killReason === "timeout") {
+        reject(new Error(`timed out after ${timeoutMs}ms`));
+        return;
+      }
+      if (killReason === "abort") {
+        reject(new Error("aborted"));
+        return;
+      }
       if (code === 0) {
         resolve({ stdout, stderr });
         return;
@@ -65,57 +96,15 @@ function runProcess(command, args, options) {
     }
   });
 }
-function runShellCommand(command, options) {
-  return new Promise((resolve, reject) => {
-    const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    const child = spawn(command, {
-      cwd: options.cwd,
-      env: options.env ?? process.env,
-      shell: true,
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        child.kill("SIGKILL");
-      }, 2e3).unref();
-      reject(new Error(`timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.on("error", (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      reject(new Error(failedProcessMessage(command, code, stdout, stderr)));
-    });
-    if (options.input !== void 0) {
-      child.stdin.end(options.input);
+function killTree(child, signal) {
+  try {
+    if (process.platform !== "win32" && typeof child.pid === "number") {
+      process.kill(-child.pid, signal);
     } else {
-      child.stdin.end();
+      child.kill(signal);
     }
-  });
+  } catch {
+  }
 }
 function failedProcessMessage(command, code, stdout, stderr) {
   const diagnostic = stderr.trim() || stdout.trim();

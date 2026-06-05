@@ -80,12 +80,13 @@ test("parseArgs rejects commit mode without a commit ref", () => {
   );
 });
 
-test("parseArgs supports reviewer selection and panel shorthand", () => {
+test("parseArgs supports reviewer selection", () => {
   const selected = parseArgs(["review", "--diff", "--reviewers", "claude,codex"], {});
   assert.deepEqual(selected.reviewers, ["claude", "codex"]);
+});
 
-  const panel = parseArgs(["review", "--diff", "--panel"], {});
-  assert.deepEqual(panel.reviewers, ["codex", "claude"]);
+test("parseArgs rejects the removed --panel flag", () => {
+  assert.throws(() => parseArgs(["review", "--diff", "--panel"], {}), /unknown option: --panel/);
 });
 
 test("parseArgs rejects unknown reviewers", () => {

@@ -488,12 +488,16 @@ function normalizeFindingLine(line) {
     /^(?:\*\*|__)(BLOCKER|SUGGESTION|QUESTION|PASS)(?::)?(?:\*\*|__):?\s*/i,
     (_match, prefix) => `${prefix.toUpperCase()}: `
   );
+  return stripSurroundingEmphasis(normalized).trim();
+}
+function stripSurroundingEmphasis(text) {
+  let result = text;
   for (const marker of ["**", "__"]) {
-    if (normalized.startsWith(marker) && normalized.endsWith(marker)) {
-      normalized = normalized.slice(marker.length, -marker.length);
+    if (result.startsWith(marker) && result.endsWith(marker)) {
+      result = result.slice(marker.length, -marker.length);
     }
   }
-  return normalized.trim();
+  return result;
 }
 async function runOneReviewer(reviewer, request, artifact, diff, signal) {
   const prepared = await prepareWorkspace({
@@ -671,13 +675,7 @@ function finding(reviewer, text) {
   return { reviewer, text: cleanFindingText(text) };
 }
 function cleanFindingText(text) {
-  let cleaned = text.trim();
-  for (const marker of ["**", "__"]) {
-    if (cleaned.startsWith(marker) && cleaned.endsWith(marker)) {
-      cleaned = cleaned.slice(marker.length, -marker.length);
-    }
-  }
-  return cleaned.trim();
+  return stripSurroundingEmphasis(text.trim()).trim();
 }
 function pushFinding(target, reviewer, text) {
   const entry = finding(reviewer, text);
@@ -792,9 +790,6 @@ function parseArgs(args, env = processEnv) {
         break;
       case "--reviewers":
         request.reviewers = parseReviewers(requireValue(rest, ++i, "--reviewers"));
-        break;
-      case "--panel":
-        request.reviewers = ["codex", "claude"];
         break;
       case "--parallel-tests":
         request.parallelTests = requireValue(rest, ++i, "--parallel-tests");

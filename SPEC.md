@@ -112,7 +112,6 @@ Defaults:
 - When an author is known, reviewers default to every available supported agent except the authoring agent.
 - When no author is known, reviewers default to every available supported agent.
 - `--reviewers codex,claude` limits the reviewer set; unavailable or author-matching reviewers are still skipped with visible warnings.
-- `--panel` is a shorthand for all supported reviewers and is useful when an agent wants to be explicit about convening the full local panel.
 - `--parallel-tests "<command>"` starts a verification command alongside reviewer agents and records the command, status, and compact output proof in the report.
 - `--test-timeout-ms <milliseconds>` controls the parallel test command timeout. If omitted, parallel tests use `--timeout-ms`.
 - `--allow-sandboxed-reviewers` unconditionally permits reviewer launch inside a Codex sandbox; use it only after independently verifying reviewer auth is environment-based and network is available.
@@ -164,7 +163,7 @@ Known local command shapes as of this spec:
 
 ```bash
 codex exec --json --skip-git-repo-check --sandbox workspace-write
-claude --print --input-format stream-json --output-format stream-json --verbose --permission-mode bypassPermissions
+claude --print --no-session-persistence --permission-mode bypassPermissions
 ```
 
 ## Workspace Isolation

@@ -83,11 +83,10 @@ The helper has a default reviewer timeout of 300 seconds. Override it only when 
 node skill/council/scripts/dist/council.mjs review --diff --base origin/main --cwd /path/to/repo --author <codex-or-claude> --timeout-ms 600000
 ```
 
-To limit reviewers or explicitly request the full local panel:
+To limit the reviewer set (unavailable or author-matching reviewers are still skipped with a visible warning):
 
 ```bash
 node skill/council/scripts/dist/council.mjs review --mode branch --base origin/main --reviewers claude --cwd /path/to/repo --author codex
-node skill/council/scripts/dist/council.mjs review --mode branch --base origin/main --panel --cwd /path/to/repo --author <codex-or-claude>
 ```
 
 To run verification alongside reviewer agents and include proof in the report:

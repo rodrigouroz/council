@@ -232,12 +232,17 @@ function normalizeFindingLine(line: string): string {
     /^(?:\*\*|__)(BLOCKER|SUGGESTION|QUESTION|PASS)(?::)?(?:\*\*|__):?\s*/i,
     (_match, prefix: string) => `${prefix.toUpperCase()}: `,
   );
+  return stripSurroundingEmphasis(normalized).trim();
+}
+
+function stripSurroundingEmphasis(text: string): string {
+  let result = text;
   for (const marker of ["**", "__"]) {
-    if (normalized.startsWith(marker) && normalized.endsWith(marker)) {
-      normalized = normalized.slice(marker.length, -marker.length);
+    if (result.startsWith(marker) && result.endsWith(marker)) {
+      result = result.slice(marker.length, -marker.length);
     }
   }
-  return normalized.trim();
+  return result;
 }
 
 async function runOneReviewer(
@@ -446,13 +451,7 @@ function finding(reviewer: string, text: string): Finding {
 }
 
 function cleanFindingText(text: string): string {
-  let cleaned = text.trim();
-  for (const marker of ["**", "__"]) {
-    if (cleaned.startsWith(marker) && cleaned.endsWith(marker)) {
-      cleaned = cleaned.slice(marker.length, -marker.length);
-    }
-  }
-  return cleaned.trim();
+  return stripSurroundingEmphasis(text.trim()).trim();
 }
 
 function pushFinding(target: Finding[], reviewer: string, text: string): Finding {

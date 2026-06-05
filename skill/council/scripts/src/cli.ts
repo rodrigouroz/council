@@ -60,9 +60,6 @@ export function parseArgs(args: string[], env: NodeJS.ProcessEnv = processEnv): 
       case "--reviewers":
         request.reviewers = parseReviewers(requireValue(rest, ++i, "--reviewers"));
         break;
-      case "--panel":
-        request.reviewers = ["codex", "claude"];
-        break;
       case "--parallel-tests":
         request.parallelTests = requireValue(rest, ++i, "--parallel-tests");
         break;

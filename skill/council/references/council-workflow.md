@@ -38,7 +38,7 @@ For closeout review, choose explicit targets when possible:
 
 `--commit` uses `git show --format= --binary <ref>`. Merge commits may produce no diff with that command shape; use branch/base review when merge-commit content matters.
 
-Use `--reviewers codex,claude` to limit the reviewer set, or `--panel` to explicitly request all supported reviewers. Use `--parallel-tests "<command>"` when a verification command can run alongside reviewer agents; a failed parallel test makes the closeout incomplete until accepted or resolved. Use `--test-timeout-ms <milliseconds>` when the verification command needs a different budget from reviewer agents.
+Use `--reviewers codex,claude` to limit the reviewer set. Use `--parallel-tests "<command>"` when a verification command can run alongside reviewer agents; a failed parallel test makes the closeout incomplete until accepted or resolved. Use `--test-timeout-ms <milliseconds>` when the verification command needs a different budget from reviewer agents.
 
 Parallel tests run in the author's real working tree, not in reviewer disposable workspaces. Choose commands that are safe for the current checkout, and avoid commands that aggressively create/delete files while reviewer workspaces are being prepared from the live checkout. If no diff is found, Council skips parallel tests and reports the review as incomplete.
 

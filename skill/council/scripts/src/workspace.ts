@@ -33,12 +33,16 @@ export async function prepareWorkspace(request: PrepareWorkspaceRequest): Promis
     await applyDirtyDiff(root, worktreePath, signal);
     await copyUntracked(root, worktreePath);
     await copyArtifactIfNeeded(request.artifactPath, worktreePath);
+    // Snapshot the state Council itself produced (applied dirty diff, copied
+    // untracked files, .council/artifact.md) so only changes the reviewer makes
+    // on top of this baseline are reported as mutations.
+    const baseline = new Set(await porcelainStatus(worktreePath));
     return {
       path: worktreePath,
       fallback: false,
       async status() {
-        const { stdout } = await runProcess("git", ["status", "--porcelain=v1", "-uall"], { cwd: worktreePath });
-        return stdout.trim();
+        const current = await porcelainStatus(worktreePath);
+        return current.filter((line) => !baseline.has(line)).join("\n").trim();
       },
       async cleanup() {
         try {
@@ -124,6 +128,11 @@ async function copyFilePreservingDirs(source: string, destination: string): Prom
   }
   await mkdir(path.dirname(destination), { recursive: true });
   await writeFile(destination, await readFile(source));
+}
+
+async function porcelainStatus(cwd: string): Promise<string[]> {
+  const { stdout } = await runProcess("git", ["status", "--porcelain=v1", "-uall"], { cwd });
+  return stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
 }
 
 function safeSegment(input: string): string {

@@ -65,6 +65,39 @@ test("prepared workspace reports reviewer mutations without touching source", as
   }
 });
 
+test("prepared workspace does not report Council's own setup as a reviewer mutation", async () => {
+  const repo = await initRepo();
+  await writeFile(path.join(repo, "tracked.txt"), "dirty change\n");
+  await writeFile(path.join(repo, "untracked.txt"), "new\n");
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "spec body\n");
+
+  const prepared = await prepareWorkspace({ cwd: repo, reviewerId: "codex", artifactPath: artifact });
+  try {
+    assert.equal(await prepared.status(), "");
+  } finally {
+    await prepared.cleanup();
+  }
+});
+
+test("prepared workspace reports a genuine reviewer mutation on top of the baseline", async () => {
+  const repo = await initRepo();
+  await writeFile(path.join(repo, "tracked.txt"), "dirty change\n");
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "spec body\n");
+
+  const prepared = await prepareWorkspace({ cwd: repo, reviewerId: "codex", artifactPath: artifact });
+  try {
+    await writeFile(path.join(prepared.path, "reviewer-new.txt"), "x\n");
+    const status = await prepared.status();
+    assert.match(status, /reviewer-new\.txt/);
+    assert.doesNotMatch(status, /artifact\.md/);
+    assert.doesNotMatch(status, /tracked\.txt/);
+  } finally {
+    await prepared.cleanup();
+  }
+});
+
 test("prepareWorkspace copy fallback copies source files and excludes generated directories", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "council-copy-source-"));
   await writeFile(path.join(dir, "source.txt"), "source\n");

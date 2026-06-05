@@ -37,12 +37,12 @@ export async function prepareWorkspace(request: PrepareWorkspaceRequest): Promis
     // untracked files, .council/artifact.md) as a git tree, so status() reports
     // any reviewer change on top of it — including further edits to files that
     // were already dirty or untracked, which a status-line baseline would hide.
-    const baselineTree = await snapshotTree(worktreePath);
+    const baselineTree = await snapshotTree(worktreePath, signal);
     return {
       path: worktreePath,
       fallback: false,
       async status() {
-        return changesSinceTree(worktreePath, baselineTree);
+        return changesSinceTree(worktreePath, baselineTree, signal);
       },
       async cleanup() {
         try {
@@ -170,15 +170,15 @@ async function copyFilePreservingDirs(source: string, destination: string, signa
 
 // Stage the current worktree and capture its tree object, so later changes can
 // be diffed against this exact content (not just git status-line categories).
-async function snapshotTree(cwd: string): Promise<string> {
-  await runProcess("git", ["add", "-A"], { cwd });
-  const { stdout } = await runProcess("git", ["write-tree"], { cwd });
+async function snapshotTree(cwd: string, signal?: AbortSignal): Promise<string> {
+  await runProcess("git", ["add", "-A"], { cwd, signal });
+  const { stdout } = await runProcess("git", ["write-tree"], { cwd, signal });
   return stdout.trim();
 }
 
-async function changesSinceTree(cwd: string, baselineTree: string): Promise<string> {
-  await runProcess("git", ["add", "-A"], { cwd });
-  const { stdout } = await runProcess("git", ["diff", "--name-status", baselineTree], { cwd });
+async function changesSinceTree(cwd: string, baselineTree: string, signal?: AbortSignal): Promise<string> {
+  await runProcess("git", ["add", "-A"], { cwd, signal });
+  const { stdout } = await runProcess("git", ["diff", "--name-status", baselineTree], { cwd, signal });
   return stdout
     .split(/\r?\n/)
     .filter((line) => line.trim().length > 0)

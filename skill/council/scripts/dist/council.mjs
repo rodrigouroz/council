@@ -220,12 +220,12 @@ async function prepareWorkspace(request) {
     await applyDirtyDiff(root, worktreePath, signal);
     await copyUntracked(root, worktreePath, signal);
     await copyArtifactIfNeeded(request.artifactPath, worktreePath, signal);
-    const baselineTree = await snapshotTree(worktreePath);
+    const baselineTree = await snapshotTree(worktreePath, signal);
     return {
       path: worktreePath,
       fallback: false,
       async status() {
-        return changesSinceTree(worktreePath, baselineTree);
+        return changesSinceTree(worktreePath, baselineTree, signal);
       },
       async cleanup() {
         try {
@@ -334,14 +334,14 @@ async function copyFilePreservingDirs(source, destination, signal) {
   await mkdir(path2.dirname(destination), { recursive: true });
   await writeFile(destination, await readFile(source));
 }
-async function snapshotTree(cwd) {
-  await runProcess("git", ["add", "-A"], { cwd });
-  const { stdout } = await runProcess("git", ["write-tree"], { cwd });
+async function snapshotTree(cwd, signal) {
+  await runProcess("git", ["add", "-A"], { cwd, signal });
+  const { stdout } = await runProcess("git", ["write-tree"], { cwd, signal });
   return stdout.trim();
 }
-async function changesSinceTree(cwd, baselineTree) {
-  await runProcess("git", ["add", "-A"], { cwd });
-  const { stdout } = await runProcess("git", ["diff", "--name-status", baselineTree], { cwd });
+async function changesSinceTree(cwd, baselineTree, signal) {
+  await runProcess("git", ["add", "-A"], { cwd, signal });
+  const { stdout } = await runProcess("git", ["diff", "--name-status", baselineTree], { cwd, signal });
   return stdout.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => line.replace(/\t/g, " ")).join("\n").trim();
 }
 function safeSegment(input) {
@@ -557,12 +557,16 @@ async function runOneReviewer(reviewer, request, artifact, diff, signal) {
     if (!hasUsableReviewerOutput(result)) {
       result.error = "no usable reviewer output; expected BLOCKER, SUGGESTION, QUESTION, or PASS";
     }
-    const status = await prepared.status();
     if (prepared.note) {
       result.workspaceStatus = prepared.note;
     }
-    if (status) {
-      result.workspaceStatus = [result.workspaceStatus, status].filter(Boolean).join("; ");
+    try {
+      const status = await prepared.status();
+      if (status) {
+        result.workspaceStatus = [result.workspaceStatus, status].filter(Boolean).join("; ");
+      }
+    } catch (error) {
+      result.workspaceStatus = [result.workspaceStatus, `status check failed: ${error.message}`].filter(Boolean).join("; ");
     }
     return result;
   } catch (error) {

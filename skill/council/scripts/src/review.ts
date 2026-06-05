@@ -277,12 +277,20 @@ async function runOneReviewer(
     if (!hasUsableReviewerOutput(result)) {
       result.error = "no usable reviewer output; expected BLOCKER, SUGGESTION, QUESTION, or PASS";
     }
-    const status = await prepared.status();
     if (prepared.note) {
       result.workspaceStatus = prepared.note;
     }
-    if (status) {
-      result.workspaceStatus = [result.workspaceStatus, status].filter(Boolean).join("; ");
+    // Status collection runs git commands that may be cancelled by the run
+    // deadline; a failure here must not discard findings the reviewer produced.
+    try {
+      const status = await prepared.status();
+      if (status) {
+        result.workspaceStatus = [result.workspaceStatus, status].filter(Boolean).join("; ");
+      }
+    } catch (error) {
+      result.workspaceStatus = [result.workspaceStatus, `status check failed: ${(error as Error).message}`]
+        .filter(Boolean)
+        .join("; ");
     }
     return result;
   } catch (error) {

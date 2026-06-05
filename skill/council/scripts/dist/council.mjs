@@ -167,7 +167,7 @@ async function runCodex(executable, request) {
     executable,
     ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write"],
     { cwd: request.cwd, input: `${request.prompt}
-`, timeoutMs: request.timeoutMs }
+`, timeoutMs: request.timeoutMs, signal: request.signal }
   );
   return parseCodexOutput(stdout);
 }
@@ -181,7 +181,7 @@ async function runClaude(executable, request) {
       "bypassPermissions"
     ],
     { cwd: request.cwd, input: `${request.prompt}
-`, timeoutMs: request.timeoutMs }
+`, timeoutMs: request.timeoutMs, signal: request.signal }
   );
   return parseClaudeOutput(stdout);
 }
@@ -208,15 +208,16 @@ import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import path2 from "node:path";
 async function prepareWorkspace(request) {
-  const root = await gitRoot(request.cwd);
-  if (!root || !await hasGitHead(root)) {
+  const signal = request.signal;
+  const root = await gitRoot(request.cwd, signal);
+  if (!root || !await hasGitHead(root, signal)) {
     return copyFallback(request, root ? "git repository has no HEAD" : "not inside a git repository");
   }
   const tmpRoot = await mkdtemp(path2.join(tmpdir(), `council-${safeSegment(request.reviewerId)}-`));
   const worktreePath = path2.join(tmpRoot, "repo");
   try {
-    await runProcess("git", ["worktree", "add", "--detach", worktreePath, "HEAD"], { cwd: root });
-    await applyDirtyDiff(root, worktreePath);
+    await runProcess("git", ["worktree", "add", "--detach", worktreePath, "HEAD"], { cwd: root, signal });
+    await applyDirtyDiff(root, worktreePath, signal);
     await copyUntracked(root, worktreePath);
     await copyArtifactIfNeeded(request.artifactPath, worktreePath);
     return {
@@ -239,26 +240,26 @@ async function prepareWorkspace(request) {
     return copyFallback(request, `git worktree setup failed: ${error.message}`);
   }
 }
-async function gitRoot(cwd) {
+async function gitRoot(cwd, signal) {
   try {
-    const { stdout } = await runProcess("git", ["rev-parse", "--show-toplevel"], { cwd });
+    const { stdout } = await runProcess("git", ["rev-parse", "--show-toplevel"], { cwd, signal });
     return stdout.trim();
   } catch {
     return void 0;
   }
 }
-async function hasGitHead(root) {
+async function hasGitHead(root, signal) {
   try {
-    await runProcess("git", ["rev-parse", "--verify", "HEAD"], { cwd: root });
+    await runProcess("git", ["rev-parse", "--verify", "HEAD"], { cwd: root, signal });
     return true;
   } catch {
     return false;
   }
 }
-async function applyDirtyDiff(root, worktreePath) {
-  const { stdout } = await runProcess("git", ["diff", "--binary", "HEAD", "--"], { cwd: root });
+async function applyDirtyDiff(root, worktreePath, signal) {
+  const { stdout } = await runProcess("git", ["diff", "--binary", "HEAD", "--"], { cwd: root, signal });
   if (!stdout.trim()) return;
-  await runProcess("git", ["apply", "--binary", "--whitespace=nowarn"], { cwd: worktreePath, input: stdout });
+  await runProcess("git", ["apply", "--binary", "--whitespace=nowarn"], { cwd: worktreePath, input: stdout, signal });
 }
 async function copyUntracked(root, worktreePath) {
   const { stdout } = await runProcess("git", ["ls-files", "--others", "--exclude-standard"], { cwd: root });
@@ -308,7 +309,22 @@ function safeSegment(input) {
 }
 
 // src/review.ts
+var DEFAULT_RUN_TIMEOUT_MS = 48e4;
 async function runReview(request) {
+  const runController = new AbortController();
+  let runTimedOut = false;
+  const runTimer = setTimeout(() => {
+    runTimedOut = true;
+    runController.abort();
+  }, request.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS);
+  runTimer.unref();
+  try {
+    return await runReviewInner(request, runController.signal, () => runTimedOut);
+  } finally {
+    clearTimeout(runTimer);
+  }
+}
+async function runReviewInner(request, signal, timedOut) {
   const discovery = discoverReviewers(process.env, request.author, request.reviewers);
   const report = {
     round: request.round,
@@ -326,13 +342,13 @@ async function runReview(request) {
     reviewCommand: request.reviewCommand
   };
   const artifact = await readArtifact(request);
-  const diffResult = await readReviewDiff(request);
+  const diffResult = await readReviewDiff({ ...request, signal });
   report.harnessNotes.push(...diffResult.harnessNotes);
   if (request.includeDiff && !diffResult.diff) {
     markIncomplete(report, "no review diff found");
     return report;
   }
-  const testProofPromise = request.parallelTests ? runParallelTests(request) : Promise.resolve(void 0);
+  const testProofPromise = request.parallelTests ? runParallelTests(request, signal) : Promise.resolve(void 0);
   if (shouldBlockSandboxedReviewers(process.env, request, discovery.reviewers)) {
     report.harnessNotes.push(
       sandboxReviewerBlockedNote()
@@ -350,10 +366,18 @@ async function runReview(request) {
     return report;
   }
   const [reviewerResults, testProof] = await Promise.all([
-    Promise.all(discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff))),
+    Promise.all(
+      discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff, signal))
+    ),
     testProofPromise
   ]);
   report.testProof = testProof;
+  if (timedOut()) {
+    report.harnessNotes.push(
+      `run timed out after ${request.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS}ms; outstanding reviewers/tests were cancelled and any completed results are kept`
+    );
+    markIncomplete(report, "run timed out");
+  }
   for (const [index, result] of reviewerResults.entries()) {
     const reviewer = discovery.reviewers[index];
     report.reviewerResults.push(result);
@@ -466,11 +490,12 @@ function normalizeFindingLine(line) {
   }
   return normalized.trim();
 }
-async function runOneReviewer(reviewer, request, artifact, diff) {
+async function runOneReviewer(reviewer, request, artifact, diff, signal) {
   const prepared = await prepareWorkspace({
     cwd: request.cwd,
     reviewerId: reviewer.id,
-    artifactPath: request.artifactPath
+    artifactPath: request.artifactPath,
+    signal
   });
   try {
     const prompt = buildPrompt({
@@ -482,7 +507,7 @@ async function runOneReviewer(reviewer, request, artifact, diff) {
       maxRounds: request.maxRounds,
       changeSummary: request.changeSummary
     });
-    const output = await runReviewer(reviewer, { cwd: prepared.path, prompt, timeoutMs: request.timeoutMs });
+    const output = await runReviewer(reviewer, { cwd: prepared.path, prompt, timeoutMs: request.timeoutMs, signal });
     const result = parseReviewerOutput(reviewer.id, output);
     if (!hasUsableReviewerOutput(result)) {
       result.error = "no usable reviewer output; expected BLOCKER, SUGGESTION, QUESTION, or PASS";
@@ -514,10 +539,11 @@ async function readArtifact(request) {
 }
 async function readReviewDiff(request) {
   if (!request.includeDiff) return { diff: "", harnessNotes: [] };
+  const git = (args) => gitStdout(request.cwd, args, request.signal);
   try {
     const mode = request.diffMode ?? "auto";
     if (mode === "local") {
-      const diff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
+      const diff = await git(["diff", "--binary", "HEAD", "--"]);
       const harnessNotes = ignoredBaseNotes(request, "--mode local");
       return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, "no diff found in local working tree"] };
     }
@@ -525,18 +551,18 @@ async function readReviewDiff(request) {
       if (!request.commitRef) {
         return { diff: "", harnessNotes: ["--mode commit requires --commit"] };
       }
-      const diff = await gitStdout(request.cwd, ["show", "--format=", "--binary", request.commitRef, "--"]);
+      const diff = await git(["show", "--format=", "--binary", request.commitRef, "--"]);
       const harnessNotes = ignoredBaseNotes(request, `--commit ${request.commitRef}`);
       return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, `no diff found for commit ${request.commitRef}`] };
     }
-    const dirtyDiff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
-    const baseRef = request.baseRef ?? await readUpstreamRef(request.cwd);
+    const dirtyDiff = await git(["diff", "--binary", "HEAD", "--"]);
+    const baseRef = request.baseRef ?? await readUpstreamRef(request.cwd, request.signal);
     if (mode === "branch" && !baseRef) {
       return { diff: "", harnessNotes: ["--mode branch requires --base or an upstream ref"] };
     }
     if (baseRef) {
-      const mergeBase = await gitStdout(request.cwd, ["merge-base", baseRef, "HEAD"]);
-      const committedDiff = await gitStdout(request.cwd, ["diff", "--binary", `${mergeBase}...HEAD`, "--"]);
+      const mergeBase = await git(["merge-base", baseRef, "HEAD"]);
+      const committedDiff = await git(["diff", "--binary", `${mergeBase}...HEAD`, "--"]);
       if (committedDiff && dirtyDiff) {
         return {
           diff: `${committedDiff}
@@ -574,10 +600,14 @@ ${dirtyDiff}`,
 function ignoredBaseNotes(request, target) {
   return request.baseRef ? [`--base ${request.baseRef} ignored by ${target}`] : [];
 }
-async function runParallelTests(request) {
+async function runParallelTests(request, signal) {
   const command = request.parallelTests;
   try {
-    const result = await runShellCommand(command, { cwd: request.cwd, timeoutMs: request.testTimeoutMs ?? request.timeoutMs });
+    const result = await runShellCommand(command, {
+      cwd: request.cwd,
+      timeoutMs: request.testTimeoutMs ?? request.timeoutMs,
+      signal
+    });
     return {
       command,
       status: "passed",
@@ -609,13 +639,13 @@ function summarizeOutput(stdout, stderr) {
 function lastNonEmptyLines(output, count) {
   return output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-count);
 }
-async function gitStdout(cwd, args) {
-  const { stdout } = await runProcess("git", args, { cwd });
+async function gitStdout(cwd, args, signal) {
+  const { stdout } = await runProcess("git", args, { cwd, signal });
   return stdout.trimEnd();
 }
-async function readUpstreamRef(cwd) {
+async function readUpstreamRef(cwd, signal) {
   try {
-    return await gitStdout(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+    return await gitStdout(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], signal);
   } catch {
     return void 0;
   }
@@ -748,6 +778,9 @@ function parseArgs(args, env = processEnv) {
         break;
       case "--test-timeout-ms":
         request.testTimeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--test-timeout-ms"), "--test-timeout-ms");
+        break;
+      case "--run-timeout-ms":
+        request.runTimeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--run-timeout-ms"), "--run-timeout-ms");
         break;
       case "--author":
         request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");

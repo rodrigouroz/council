@@ -44,4 +44,4 @@ Parallel tests run in the author's real working tree, not in reviewer disposable
 
 Council records the review command in its report. Do not put secrets directly in command-line arguments.
 
-Reviewer processes time out after 300 seconds by default. Use `--timeout-ms <milliseconds>` only when a task-specific bound is needed. Empty reviewer output and timed-out reviewers make the review incomplete, not passed.
+Reviewer processes time out after 300 seconds by default. Use `--timeout-ms <milliseconds>` only when a task-specific bound is needed. Council also bounds the whole run with `--run-timeout-ms` (default 480000): on expiry it cancels outstanding reviewers/tests, terminates their process groups, keeps completed results, and reports the review as incomplete. Empty reviewer output and timed-out reviewers make the review incomplete, not passed.

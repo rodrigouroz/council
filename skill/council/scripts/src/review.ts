@@ -22,7 +22,10 @@ export interface DiffReadRequest {
   diffMode?: DiffMode;
   baseRef?: string;
   commitRef?: string;
+  signal?: AbortSignal;
 }
+
+export const DEFAULT_RUN_TIMEOUT_MS = 480_000;
 
 export interface DiffReadResult {
   diff: string;
@@ -30,6 +33,25 @@ export interface DiffReadResult {
 }
 
 export async function runReview(request: ReviewRequest): Promise<CouncilReport> {
+  const runController = new AbortController();
+  let runTimedOut = false;
+  const runTimer = setTimeout(() => {
+    runTimedOut = true;
+    runController.abort();
+  }, request.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS);
+  runTimer.unref();
+  try {
+    return await runReviewInner(request, runController.signal, () => runTimedOut);
+  } finally {
+    clearTimeout(runTimer);
+  }
+}
+
+async function runReviewInner(
+  request: ReviewRequest,
+  signal: AbortSignal,
+  timedOut: () => boolean,
+): Promise<CouncilReport> {
   const discovery = discoverReviewers(process.env, request.author, request.reviewers);
   const report: CouncilReport = {
     round: request.round,
@@ -48,13 +70,13 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
   };
 
   const artifact = await readArtifact(request);
-  const diffResult = await readReviewDiff(request);
+  const diffResult = await readReviewDiff({ ...request, signal });
   report.harnessNotes.push(...diffResult.harnessNotes);
   if (request.includeDiff && !diffResult.diff) {
     markIncomplete(report, "no review diff found");
     return report;
   }
-  const testProofPromise = request.parallelTests ? runParallelTests(request) : Promise.resolve(undefined);
+  const testProofPromise = request.parallelTests ? runParallelTests(request, signal) : Promise.resolve(undefined);
   if (shouldBlockSandboxedReviewers(process.env, request, discovery.reviewers)) {
     report.harnessNotes.push(
       sandboxReviewerBlockedNote(),
@@ -73,10 +95,18 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
   }
 
   const [reviewerResults, testProof] = await Promise.all([
-    Promise.all(discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff))),
+    Promise.all(
+      discovery.reviewers.map((reviewer) => runOneReviewer(reviewer, request, artifact, diffResult.diff, signal)),
+    ),
     testProofPromise,
   ]);
   report.testProof = testProof;
+  if (timedOut()) {
+    report.harnessNotes.push(
+      `run timed out after ${request.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS}ms; outstanding reviewers/tests were cancelled and any completed results are kept`,
+    );
+    markIncomplete(report, "run timed out");
+  }
   for (const [index, result] of reviewerResults.entries()) {
     const reviewer = discovery.reviewers[index]!;
     report.reviewerResults.push(result);
@@ -215,11 +245,13 @@ async function runOneReviewer(
   request: ReviewRequest,
   artifact: string,
   diff: string,
+  signal?: AbortSignal,
 ): Promise<ReviewerResult> {
   const prepared = await prepareWorkspace({
     cwd: request.cwd,
     reviewerId: reviewer.id,
     artifactPath: request.artifactPath,
+    signal,
   });
   try {
     const prompt = buildPrompt({
@@ -231,7 +263,7 @@ async function runOneReviewer(
       maxRounds: request.maxRounds,
       changeSummary: request.changeSummary,
     });
-    const output = await runReviewer(reviewer, { cwd: prepared.path, prompt, timeoutMs: request.timeoutMs });
+    const output = await runReviewer(reviewer, { cwd: prepared.path, prompt, timeoutMs: request.timeoutMs, signal });
     const result = parseReviewerOutput(reviewer.id, output);
     if (!hasUsableReviewerOutput(result)) {
       result.error = "no usable reviewer output; expected BLOCKER, SUGGESTION, QUESTION, or PASS";
@@ -265,10 +297,11 @@ async function readArtifact(request: ReviewRequest): Promise<string> {
 
 export async function readReviewDiff(request: DiffReadRequest): Promise<DiffReadResult> {
   if (!request.includeDiff) return { diff: "", harnessNotes: [] };
+  const git = (args: string[]): Promise<string> => gitStdout(request.cwd, args, request.signal);
   try {
     const mode = request.diffMode ?? "auto";
     if (mode === "local") {
-      const diff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
+      const diff = await git(["diff", "--binary", "HEAD", "--"]);
       const harnessNotes = ignoredBaseNotes(request, "--mode local");
       return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, "no diff found in local working tree"] };
     }
@@ -276,18 +309,18 @@ export async function readReviewDiff(request: DiffReadRequest): Promise<DiffRead
       if (!request.commitRef) {
         return { diff: "", harnessNotes: ["--mode commit requires --commit"] };
       }
-      const diff = await gitStdout(request.cwd, ["show", "--format=", "--binary", request.commitRef, "--"]);
+      const diff = await git(["show", "--format=", "--binary", request.commitRef, "--"]);
       const harnessNotes = ignoredBaseNotes(request, `--commit ${request.commitRef}`);
       return diff ? { diff, harnessNotes } : { diff: "", harnessNotes: [...harnessNotes, `no diff found for commit ${request.commitRef}`] };
     }
-    const dirtyDiff = await gitStdout(request.cwd, ["diff", "--binary", "HEAD", "--"]);
-    const baseRef = request.baseRef ?? (await readUpstreamRef(request.cwd));
+    const dirtyDiff = await git(["diff", "--binary", "HEAD", "--"]);
+    const baseRef = request.baseRef ?? (await readUpstreamRef(request.cwd, request.signal));
     if (mode === "branch" && !baseRef) {
       return { diff: "", harnessNotes: ["--mode branch requires --base or an upstream ref"] };
     }
     if (baseRef) {
-      const mergeBase = await gitStdout(request.cwd, ["merge-base", baseRef, "HEAD"]);
-      const committedDiff = await gitStdout(request.cwd, ["diff", "--binary", `${mergeBase}...HEAD`, "--"]);
+      const mergeBase = await git(["merge-base", baseRef, "HEAD"]);
+      const committedDiff = await git(["diff", "--binary", `${mergeBase}...HEAD`, "--"]);
       if (committedDiff && dirtyDiff) {
         return {
           diff: `${committedDiff}\n\n# ---- dirty working-tree changes ----\n${dirtyDiff}`,
@@ -326,10 +359,14 @@ function ignoredBaseNotes(request: DiffReadRequest, target: string): string[] {
   return request.baseRef ? [`--base ${request.baseRef} ignored by ${target}`] : [];
 }
 
-async function runParallelTests(request: ReviewRequest): Promise<TestProof> {
+async function runParallelTests(request: ReviewRequest, signal?: AbortSignal): Promise<TestProof> {
   const command = request.parallelTests!;
   try {
-    const result = await runShellCommand(command, { cwd: request.cwd, timeoutMs: request.testTimeoutMs ?? request.timeoutMs });
+    const result = await runShellCommand(command, {
+      cwd: request.cwd,
+      timeoutMs: request.testTimeoutMs ?? request.timeoutMs,
+      signal,
+    });
     return {
       command,
       status: "passed",
@@ -370,14 +407,14 @@ function lastNonEmptyLines(output: string, count: number): string[] {
     .slice(-count);
 }
 
-async function gitStdout(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await runProcess("git", args, { cwd });
+async function gitStdout(cwd: string, args: string[], signal?: AbortSignal): Promise<string> {
+  const { stdout } = await runProcess("git", args, { cwd, signal });
   return stdout.trimEnd();
 }
 
-async function readUpstreamRef(cwd: string): Promise<string | undefined> {
+async function readUpstreamRef(cwd: string, signal?: AbortSignal): Promise<string | undefined> {
   try {
-    return await gitStdout(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"]);
+    return await gitStdout(cwd, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], signal);
   } catch {
     return undefined;
   }

@@ -75,6 +75,8 @@ node skill/council/scripts/dist/council.mjs review --diff --base origin/main --c
 
 `--diff` reviews dirty working-tree changes. When `--base` or an upstream ref is available, it also includes committed changes against that ref so stray local edits do not hide the branch diff. If no diff is found, treat the result as unreviewed and pass the correct `--base <ref>`.
 
+Council also enforces its own overall run deadline (`--run-timeout-ms`, default 480000) so it cannot hang indefinitely: when the deadline is reached it cancels outstanding reviewers and tests (terminating their whole process group), keeps any results that already completed, and reports `review incomplete`. The per-reviewer/process timeout below is separate and bounds a single child process.
+
 The helper has a default reviewer timeout of 300 seconds. Override it only when the task justifies a different bound:
 
 ```bash

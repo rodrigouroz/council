@@ -13,6 +13,7 @@ export interface RunReviewerRequest {
   cwd: string;
   prompt: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export function discoverReviewers(
@@ -73,7 +74,7 @@ async function runCodex(executable: string, request: RunReviewerRequest): Promis
   const { stdout } = await runProcess(
     executable,
     ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write"],
-    { cwd: request.cwd, input: `${request.prompt}\n`, timeoutMs: request.timeoutMs },
+    { cwd: request.cwd, input: `${request.prompt}\n`, timeoutMs: request.timeoutMs, signal: request.signal },
   );
   return parseCodexOutput(stdout);
 }
@@ -87,7 +88,7 @@ async function runClaude(executable: string, request: RunReviewerRequest): Promi
       "--permission-mode",
       "bypassPermissions",
     ],
-    { cwd: request.cwd, input: `${request.prompt}\n`, timeoutMs: request.timeoutMs },
+    { cwd: request.cwd, input: `${request.prompt}\n`, timeoutMs: request.timeoutMs, signal: request.signal },
   );
   return parseClaudeOutput(stdout);
 }

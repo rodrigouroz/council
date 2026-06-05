@@ -51,6 +51,9 @@ export function parseArgs(args: string[], env: NodeJS.ProcessEnv = processEnv): 
       case "--test-timeout-ms":
         request.testTimeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--test-timeout-ms"), "--test-timeout-ms");
         break;
+      case "--run-timeout-ms":
+        request.runTimeoutMs = parsePositiveInteger(requireValue(rest, ++i, "--run-timeout-ms"), "--run-timeout-ms");
+        break;
       case "--author":
         request.author = parseAuthor(requireValue(rest, ++i, "--author"), "--author");
         break;

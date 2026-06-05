@@ -478,6 +478,96 @@ test("parallel tests are skipped when diff review has no diff", async () => {
   assert.equal(report.testProof, undefined);
 });
 
+test("run deadline cancels a hanging reviewer and renders incomplete", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-run-timeout-"));
+  await writeFile(
+    path.join(binDir, "claude"),
+    [
+      `#!${process.execPath}`,
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => { setTimeout(() => console.log('PASS: too late'), 5000); });",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  try {
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      author: "codex",
+      reviewers: ["claude"],
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+      runTimeoutMs: 1_500,
+    });
+
+    assert.equal(report.incomplete, true);
+    assert.ok(report.incompleteReasons.includes("run timed out"));
+    assert.match(report.harnessNotes.join("\n"), /run timed out/);
+    assert.match(report.reviewerResults[0]?.error ?? "", /aborted/);
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
+test("run deadline keeps a fast reviewer's findings while cancelling a slow one", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-run-partial-"));
+  await writeFile(
+    path.join(binDir, "codex"),
+    [
+      `#!${process.execPath}`,
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => {",
+      "  console.log(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'SUGGESTION: keep it' } }));",
+      "});",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  await writeFile(
+    path.join(binDir, "claude"),
+    [
+      `#!${process.execPath}`,
+      "process.stdin.resume();",
+      "process.stdin.on('end', () => { setTimeout(() => console.log('PASS: too late'), 5000); });",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  try {
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      reviewers: ["codex", "claude"],
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+      runTimeoutMs: 1_500,
+    });
+
+    assert.equal(report.incomplete, true);
+    assert.equal(report.suggestions.some((s) => s.text === "keep it"), true);
+    const claude = report.reviewerResults.find((r) => r.reviewer === "claude");
+    assert.match(claude?.error ?? "", /aborted/);
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
 test("reports with empty reviewer output do not render as clean passes", async () => {
   const repo = await initRepo();
   const artifact = path.join(repo, "artifact.md");

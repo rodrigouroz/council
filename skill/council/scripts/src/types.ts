@@ -13,6 +13,7 @@ export interface ReviewRequest {
   commitRef?: string;
   timeoutMs?: number;
   testTimeoutMs?: number;
+  runTimeoutMs?: number;
   author?: ReviewerId;
   authorSource?: string;
   reviewers?: ReviewerId[];

@@ -8,6 +8,7 @@ export interface PrepareWorkspaceRequest {
   cwd: string;
   reviewerId: string;
   artifactPath?: string;
+  signal?: AbortSignal;
 }
 
 export interface PreparedWorkspace {
@@ -19,16 +20,17 @@ export interface PreparedWorkspace {
 }
 
 export async function prepareWorkspace(request: PrepareWorkspaceRequest): Promise<PreparedWorkspace> {
-  const root = await gitRoot(request.cwd);
-  if (!root || !(await hasGitHead(root))) {
+  const signal = request.signal;
+  const root = await gitRoot(request.cwd, signal);
+  if (!root || !(await hasGitHead(root, signal))) {
     return copyFallback(request, root ? "git repository has no HEAD" : "not inside a git repository");
   }
 
   const tmpRoot = await mkdtemp(path.join(tmpdir(), `council-${safeSegment(request.reviewerId)}-`));
   const worktreePath = path.join(tmpRoot, "repo");
   try {
-    await runProcess("git", ["worktree", "add", "--detach", worktreePath, "HEAD"], { cwd: root });
-    await applyDirtyDiff(root, worktreePath);
+    await runProcess("git", ["worktree", "add", "--detach", worktreePath, "HEAD"], { cwd: root, signal });
+    await applyDirtyDiff(root, worktreePath, signal);
     await copyUntracked(root, worktreePath);
     await copyArtifactIfNeeded(request.artifactPath, worktreePath);
     return {
@@ -52,28 +54,28 @@ export async function prepareWorkspace(request: PrepareWorkspaceRequest): Promis
   }
 }
 
-async function gitRoot(cwd: string): Promise<string | undefined> {
+async function gitRoot(cwd: string, signal?: AbortSignal): Promise<string | undefined> {
   try {
-    const { stdout } = await runProcess("git", ["rev-parse", "--show-toplevel"], { cwd });
+    const { stdout } = await runProcess("git", ["rev-parse", "--show-toplevel"], { cwd, signal });
     return stdout.trim();
   } catch {
     return undefined;
   }
 }
 
-async function hasGitHead(root: string): Promise<boolean> {
+async function hasGitHead(root: string, signal?: AbortSignal): Promise<boolean> {
   try {
-    await runProcess("git", ["rev-parse", "--verify", "HEAD"], { cwd: root });
+    await runProcess("git", ["rev-parse", "--verify", "HEAD"], { cwd: root, signal });
     return true;
   } catch {
     return false;
   }
 }
 
-async function applyDirtyDiff(root: string, worktreePath: string): Promise<void> {
-  const { stdout } = await runProcess("git", ["diff", "--binary", "HEAD", "--"], { cwd: root });
+async function applyDirtyDiff(root: string, worktreePath: string, signal?: AbortSignal): Promise<void> {
+  const { stdout } = await runProcess("git", ["diff", "--binary", "HEAD", "--"], { cwd: root, signal });
   if (!stdout.trim()) return;
-  await runProcess("git", ["apply", "--binary", "--whitespace=nowarn"], { cwd: worktreePath, input: stdout });
+  await runProcess("git", ["apply", "--binary", "--whitespace=nowarn"], { cwd: worktreePath, input: stdout, signal });
 }
 
 async function copyUntracked(root: string, worktreePath: string): Promise<void> {

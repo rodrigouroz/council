@@ -515,13 +515,14 @@ function stripSurroundingEmphasis(text) {
   return result;
 }
 async function runOneReviewer(reviewer, request, artifact, diff, signal) {
-  const prepared = await prepareWorkspace({
-    cwd: request.cwd,
-    reviewerId: reviewer.id,
-    artifactPath: request.artifactPath,
-    signal
-  });
+  let prepared;
   try {
+    prepared = await prepareWorkspace({
+      cwd: request.cwd,
+      reviewerId: reviewer.id,
+      artifactPath: request.artifactPath,
+      signal
+    });
     const prompt = buildPrompt({
       artifactKind: artifactKind(request),
       artifact,
@@ -554,7 +555,7 @@ async function runOneReviewer(reviewer, request, artifact, diff, signal) {
       error: error.message
     };
   } finally {
-    await prepared.cleanup();
+    if (prepared) await prepared.cleanup();
   }
 }
 async function readArtifact(request) {

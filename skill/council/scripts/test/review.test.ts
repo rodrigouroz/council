@@ -568,6 +568,38 @@ test("run deadline keeps a fast reviewer's findings while cancelling a slow one"
   }
 });
 
+test("an abort during workspace setup yields an incomplete report, not a rejection", async () => {
+  const repo = await initRepo();
+  const artifact = path.join(repo, "artifact.md");
+  await writeFile(artifact, "review me\n");
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-abort-setup-"));
+  await writeFile(path.join(binDir, "claude"), `#!${process.execPath}\nconsole.log('PASS: ok')\n`, { mode: 0o755 });
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
+  try {
+    // A 1ms run deadline aborts around workspace preparation. runReview must
+    // still resolve with an incomplete report rather than rejecting.
+    const report = await runReview({
+      command: "review",
+      cwd: repo,
+      artifactPath: artifact,
+      includeDiff: false,
+      author: "codex",
+      reviewers: ["claude"],
+      maxRounds: 3,
+      round: 1,
+      changeSummary: "",
+      format: "markdown",
+      runTimeoutMs: 1,
+    });
+
+    assert.equal(report.incomplete, true);
+    assert.ok((report.reviewerResults[0]?.error ?? "").length > 0);
+  } finally {
+    process.env.PATH = oldPath;
+  }
+});
+
 test("reports with empty reviewer output do not render as clean passes", async () => {
   const repo = await initRepo();
   const artifact = path.join(repo, "artifact.md");

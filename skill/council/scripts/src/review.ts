@@ -4,7 +4,7 @@ import path from "node:path";
 import { discoverReviewers, runReviewer } from "./agents.ts";
 import { runProcess, runShellCommand } from "./process.ts";
 import type { CouncilReport, DiffMode, Finding, ReviewRequest, Reviewer, ReviewerResult, TestProof } from "./types.ts";
-import { prepareWorkspace } from "./workspace.ts";
+import { prepareWorkspace, type PreparedWorkspace } from "./workspace.ts";
 
 export interface PromptInput {
   artifactKind: string;
@@ -252,13 +252,17 @@ async function runOneReviewer(
   diff: string,
   signal?: AbortSignal,
 ): Promise<ReviewerResult> {
-  const prepared = await prepareWorkspace({
-    cwd: request.cwd,
-    reviewerId: reviewer.id,
-    artifactPath: request.artifactPath,
-    signal,
-  });
+  // prepareWorkspace can throw (e.g. a run-deadline abort during git setup), so
+  // it must be inside the try: a throw here becomes a reviewer error result, not
+  // a rejection that escapes Promise.all and crashes the whole run.
+  let prepared: PreparedWorkspace | undefined;
   try {
+    prepared = await prepareWorkspace({
+      cwd: request.cwd,
+      reviewerId: reviewer.id,
+      artifactPath: request.artifactPath,
+      signal,
+    });
     const prompt = buildPrompt({
       artifactKind: artifactKind(request),
       artifact,
@@ -291,7 +295,7 @@ async function runOneReviewer(
       error: (error as Error).message,
     };
   } finally {
-    await prepared.cleanup();
+    if (prepared) await prepared.cleanup();
   }
 }
 

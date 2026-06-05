@@ -272,6 +272,8 @@ test("reports render markdown and json", () => {
     questions: [{ reviewer: "codex", text: "who owns rollout?" }],
     harnessNotes: ["reviewer claude skipped"],
     reviewerResults: [],
+    incomplete: false,
+    incompleteReasons: [],
     nextRoundRecommended: true,
   };
 
@@ -297,6 +299,8 @@ test("reports with no reviewers do not render as clean passes", () => {
     questions: [],
     harnessNotes: ["no reviewer agents available"],
     reviewerResults: [],
+    incomplete: false,
+    incompleteReasons: [],
     nextRoundRecommended: false,
   };
 
@@ -308,7 +312,7 @@ test("reports with no reviewers do not render as clean passes", () => {
   assert.equal(json.result, "no reviewer agents available");
 });
 
-test("reports with no diff found render as incomplete", () => {
+test("reports flagged incomplete render as incomplete regardless of note wording", () => {
   const report = {
     round: 1,
     maxRounds: 3,
@@ -317,8 +321,11 @@ test("reports with no diff found render as incomplete", () => {
     blockingFindings: [],
     suggestions: [],
     questions: [],
-    harnessNotes: ["no diff found; pass --base <ref> for committed branch review"],
+    // Deliberately reworded so the verdict cannot come from string-matching notes.
+    harnessNotes: ["the working tree produced nothing to review"],
     reviewerResults: [],
+    incomplete: true,
+    incompleteReasons: ["no review diff found"],
     nextRoundRecommended: false,
   };
 
@@ -326,7 +333,7 @@ test("reports with no diff found render as incomplete", () => {
   assert.equal(json.result, "review incomplete");
 });
 
-test("reports with branch mode missing a base or upstream render as incomplete", () => {
+test("a note that merely mentions a diff problem does not flip a complete review", () => {
   const report = {
     round: 1,
     maxRounds: 3,
@@ -335,13 +342,17 @@ test("reports with branch mode missing a base or upstream render as incomplete",
     blockingFindings: [],
     suggestions: [],
     questions: [],
-    harnessNotes: ["--mode branch requires --base or an upstream ref"],
+    // Old code keyed on phrases like "no diff found"; the verdict must now come
+    // from the structured flag, not this text.
+    harnessNotes: ["no diff found in an unrelated submodule (informational)"],
     reviewerResults: [],
+    incomplete: false,
+    incompleteReasons: [],
     nextRoundRecommended: false,
   };
 
   const json = JSON.parse(renderJson(report));
-  assert.equal(json.result, "review incomplete");
+  assert.equal(json.result, "no blocking findings");
 });
 
 test("reports include review command and parallel test proof", () => {
@@ -355,6 +366,8 @@ test("reports include review command and parallel test proof", () => {
     questions: [],
     harnessNotes: [],
     reviewerResults: [],
+    incomplete: false,
+    incompleteReasons: [],
     nextRoundRecommended: false,
     reviewCommand: "council review --mode branch --base origin/main",
     testProof: {

@@ -320,6 +320,8 @@ async function runReview(request) {
     questions: [],
     harnessNotes: [authorNote(request), ...sandboxHarnessNotes(process.env), ...discovery.warnings],
     reviewerResults: [],
+    incomplete: false,
+    incompleteReasons: [],
     nextRoundRecommended: false,
     reviewCommand: request.reviewCommand
   };
@@ -327,6 +329,7 @@ async function runReview(request) {
   const diffResult = await readReviewDiff(request);
   report.harnessNotes.push(...diffResult.harnessNotes);
   if (request.includeDiff && !diffResult.diff) {
+    markIncomplete(report, "no review diff found");
     return report;
   }
   const testProofPromise = request.parallelTests ? runParallelTests(request) : Promise.resolve(void 0);
@@ -335,6 +338,7 @@ async function runReview(request) {
       sandboxReviewerBlockedNote()
     );
     report.reviewers = [];
+    markIncomplete(report, "reviewer launch blocked inside sandbox");
     report.testProof = await testProofPromise;
     appendTestProofNotes(report);
     return report;
@@ -358,6 +362,7 @@ async function runReview(request) {
     report.questions.push(...result.questions);
     if (result.error) {
       report.harnessNotes.push(`reviewer ${reviewer.id} failed: ${result.error}`);
+      markIncomplete(report, `reviewer ${reviewer.id} failed`);
     }
     if (result.workspaceStatus) {
       report.harnessNotes.push(`reviewer ${reviewer.id} left workspace changes: ${result.workspaceStatus}`);
@@ -589,6 +594,13 @@ async function runParallelTests(request) {
 function appendTestProofNotes(report) {
   if (report.testProof?.status === "failed") {
     report.harnessNotes.push(`parallel tests failed: ${report.testProof.summary}`);
+    markIncomplete(report, "parallel tests failed");
+  }
+}
+function markIncomplete(report, reason) {
+  report.incomplete = true;
+  if (!report.incompleteReasons.includes(reason)) {
+    report.incompleteReasons.push(reason);
   }
 }
 function summarizeOutput(stdout, stderr) {
@@ -682,16 +694,13 @@ function findingSection(title, findings) {
   return [`## ${title}`, ...findings.map((finding2) => `- ${finding2.reviewer}: ${finding2.text}`)];
 }
 function reportResult(report) {
-  if (report.reviewerResults.some((result) => result.error) || report.testProof?.status === "failed" || report.harnessNotes.some(isIncompleteHarnessNote)) {
+  if (report.incomplete) {
     return "review incomplete";
   }
   if (report.reviewers.length === 0) {
     return "no reviewer agents available";
   }
   return report.nextRoundRecommended ? "next round recommended" : "no blocking findings";
-}
-function isIncompleteHarnessNote(note) {
-  return note.startsWith("no diff found") || note.startsWith("failed to read diff") || note.startsWith("--mode ") || note.startsWith("reviewer launch blocked");
 }
 
 // src/cli.ts

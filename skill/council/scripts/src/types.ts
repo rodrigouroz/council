@@ -61,6 +61,8 @@ export interface CouncilReport {
   questions: Finding[];
   harnessNotes: string[];
   reviewerResults: ReviewerResult[];
+  incomplete: boolean;
+  incompleteReasons: string[];
   nextRoundRecommended: boolean;
   reviewCommand?: string;
   testProof?: TestProof;

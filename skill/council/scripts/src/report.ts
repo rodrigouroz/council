@@ -47,24 +47,11 @@ function findingSection(title: string, findings: Finding[]): string[] {
 }
 
 function reportResult(report: CouncilReport): string {
-  if (
-    report.reviewerResults.some((result) => result.error) ||
-    report.testProof?.status === "failed" ||
-    report.harnessNotes.some(isIncompleteHarnessNote)
-  ) {
+  if (report.incomplete) {
     return "review incomplete";
   }
   if (report.reviewers.length === 0) {
     return "no reviewer agents available";
   }
   return report.nextRoundRecommended ? "next round recommended" : "no blocking findings";
-}
-
-function isIncompleteHarnessNote(note: string): boolean {
-  return (
-    note.startsWith("no diff found") ||
-    note.startsWith("failed to read diff") ||
-    note.startsWith("--mode ") ||
-    note.startsWith("reviewer launch blocked")
-  );
 }

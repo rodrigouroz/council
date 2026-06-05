@@ -41,6 +41,8 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
     questions: [],
     harnessNotes: [authorNote(request), ...sandboxHarnessNotes(process.env), ...discovery.warnings],
     reviewerResults: [],
+    incomplete: false,
+    incompleteReasons: [],
     nextRoundRecommended: false,
     reviewCommand: request.reviewCommand,
   };
@@ -49,6 +51,7 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
   const diffResult = await readReviewDiff(request);
   report.harnessNotes.push(...diffResult.harnessNotes);
   if (request.includeDiff && !diffResult.diff) {
+    markIncomplete(report, "no review diff found");
     return report;
   }
   const testProofPromise = request.parallelTests ? runParallelTests(request) : Promise.resolve(undefined);
@@ -57,6 +60,7 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
       sandboxReviewerBlockedNote(),
     );
     report.reviewers = [];
+    markIncomplete(report, "reviewer launch blocked inside sandbox");
     report.testProof = await testProofPromise;
     appendTestProofNotes(report);
     return report;
@@ -81,6 +85,7 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
     report.questions.push(...result.questions);
     if (result.error) {
       report.harnessNotes.push(`reviewer ${reviewer.id} failed: ${result.error}`);
+      markIncomplete(report, `reviewer ${reviewer.id} failed`);
     }
     if (result.workspaceStatus) {
       report.harnessNotes.push(`reviewer ${reviewer.id} left workspace changes: ${result.workspaceStatus}`);
@@ -342,6 +347,14 @@ async function runParallelTests(request: ReviewRequest): Promise<TestProof> {
 function appendTestProofNotes(report: CouncilReport): void {
   if (report.testProof?.status === "failed") {
     report.harnessNotes.push(`parallel tests failed: ${report.testProof.summary}`);
+    markIncomplete(report, "parallel tests failed");
+  }
+}
+
+function markIncomplete(report: CouncilReport, reason: string): void {
+  report.incomplete = true;
+  if (!report.incompleteReasons.includes(reason)) {
+    report.incompleteReasons.push(reason);
   }
 }
 

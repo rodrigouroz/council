@@ -104,24 +104,16 @@ function shouldBlockSandboxedReviewers(
   if (!env.CODEX_SANDBOX || reviewers.length === 0 || request.allowSandboxedReviewers) {
     return false;
   }
-  if (env.CODEX_SANDBOX_NETWORK_DISABLED === "1") {
-    return true;
-  }
-  return !reviewers.every((reviewer) => reviewerHasEnvAuth(env, reviewer.id));
-}
-
-function reviewerHasEnvAuth(env: NodeJS.ProcessEnv, reviewer: string): boolean {
-  if (reviewer === "claude") {
-    return Boolean(env.ANTHROPIC_API_KEY);
-  }
-  if (reviewer === "codex") {
-    return Boolean(env.OPENAI_API_KEY);
-  }
-  return false;
+  // Block only on the one signal we can observe reliably: disabled network.
+  // Reviewer auth is commonly OAuth/subscription state in the home directory,
+  // so inferring usability from API-key env vars wrongly blocks the common case.
+  // When a reviewer's auth is actually unavailable, the launch fails and is
+  // surfaced as a reviewer error instead.
+  return env.CODEX_SANDBOX_NETWORK_DISABLED === "1";
 }
 
 function sandboxReviewerBlockedNote(): string {
-  return "reviewer launch blocked: Council is running inside a Codex sandbox without reviewer-safe auth/network. Rerun the Council helper outside the sandbox. In Codex tool calls, use sandbox_permissions=require_escalated; from a shell, use codex --sandbox danger-full-access or --dangerously-bypass-approvals-and-sandbox only when you understand the risk. --allow-sandboxed-reviewers is an unconditional override; use it only after independently verifying reviewer auth is environment-based and network is available.";
+  return "reviewer launch blocked: Council is running inside a Codex sandbox with network disabled, so reviewer CLIs cannot reach their model backends. Rerun outside the sandbox. In Codex tool calls, use sandbox_permissions=require_escalated; from a shell, use codex --sandbox danger-full-access or --dangerously-bypass-approvals-and-sandbox only when you understand the risk. --allow-sandboxed-reviewers is an unconditional override.";
 }
 
 function authorNote(request: ReviewRequest): string {
@@ -137,7 +129,7 @@ export function sandboxHarnessNotes(env: NodeJS.ProcessEnv): string[] {
   if (!sandbox) return [];
   const networkNote = env.CODEX_SANDBOX_NETWORK_DISABLED === "1" ? " with network disabled" : "";
   return [
-    `running inside CODEX_SANDBOX=${sandbox}${networkNote}; reviewer CLIs may be unable to access auth, home state, or network unless reviewer auth is environment-based and network is available.`,
+    `running inside CODEX_SANDBOX=${sandbox}${networkNote}; reviewer CLIs run as local child processes and need their normal auth/home state and network access.`,
   ];
 }
 

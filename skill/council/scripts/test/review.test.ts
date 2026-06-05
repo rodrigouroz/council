@@ -122,7 +122,7 @@ test("readReviewDiff only reads git diff when diff review is requested", async (
 
 test("sandboxHarnessNotes warns when Codex sandboxing may block reviewer auth", () => {
   assert.deepEqual(sandboxHarnessNotes({ CODEX_SANDBOX: "seatbelt", CODEX_SANDBOX_NETWORK_DISABLED: "1" }), [
-    "running inside CODEX_SANDBOX=seatbelt with network disabled; reviewer CLIs may be unable to access auth, home state, or network unless reviewer auth is environment-based and network is available.",
+    "running inside CODEX_SANDBOX=seatbelt with network disabled; reviewer CLIs run as local child processes and need their normal auth/home state and network access.",
   ]);
 });
 
@@ -618,11 +618,11 @@ test("blocked sandbox reviewer launch still records parallel test proof", async 
   }
 });
 
-test("runReview allows sandboxed reviewer launch with network and env auth", async () => {
+test("runReview allows sandboxed reviewer launch when network is enabled even without an API key", async () => {
   const repo = await initRepo();
   const artifact = path.join(repo, "artifact.md");
   await writeFile(artifact, "review me\n");
-  const binDir = await mkdtemp(path.join(tmpdir(), "council-sandbox-env-auth-"));
+  const binDir = await mkdtemp(path.join(tmpdir(), "council-sandbox-network-"));
   await writeFile(path.join(binDir, "claude"), `#!${process.execPath}\nconsole.log('PASS: ok')\n`, { mode: 0o755 });
 
   const oldPath = process.env.PATH;
@@ -632,7 +632,8 @@ test("runReview allows sandboxed reviewer launch with network and env auth", asy
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
   process.env.CODEX_SANDBOX = "landlock";
   delete process.env.CODEX_SANDBOX_NETWORK_DISABLED;
-  process.env.ANTHROPIC_API_KEY = "test-key";
+  // The common case: OAuth/subscription auth, no API key env var. Must not block.
+  delete process.env.ANTHROPIC_API_KEY;
   try {
     const report = await runReview({
       command: "review",

@@ -98,6 +98,21 @@ test("prepared workspace reports a genuine reviewer mutation on top of the basel
   }
 });
 
+test("prepared workspace reports a reviewer edit to an already-dirty file", async () => {
+  const repo = await initRepo();
+  await writeFile(path.join(repo, "tracked.txt"), "dirty change\n");
+
+  const prepared = await prepareWorkspace({ cwd: repo, reviewerId: "codex" });
+  try {
+    await writeFile(path.join(prepared.path, "tracked.txt"), "dirty change\nreviewer addition\n");
+    const status = await prepared.status();
+    assert.match(status, /tracked\.txt/);
+    assert.equal(await readFile(path.join(repo, "tracked.txt"), "utf8"), "dirty change\n");
+  } finally {
+    await prepared.cleanup();
+  }
+});
+
 test("prepareWorkspace propagates an aborted signal and cleans up the partial copy fallback", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "council-abort-fallback-"));
   await writeFile(path.join(dir, "source.txt"), "source\n");

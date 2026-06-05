@@ -218,15 +218,14 @@ async function prepareWorkspace(request) {
   try {
     await runProcess("git", ["worktree", "add", "--detach", worktreePath, "HEAD"], { cwd: root, signal });
     await applyDirtyDiff(root, worktreePath, signal);
-    await copyUntracked(root, worktreePath);
-    await copyArtifactIfNeeded(request.artifactPath, worktreePath);
-    const baseline = new Set(await porcelainStatus(worktreePath));
+    await copyUntracked(root, worktreePath, signal);
+    await copyArtifactIfNeeded(request.artifactPath, worktreePath, signal);
+    const baselineTree = await snapshotTree(worktreePath);
     return {
       path: worktreePath,
       fallback: false,
       async status() {
-        const current = await porcelainStatus(worktreePath);
-        return current.filter((line) => !baseline.has(line)).join("\n").trim();
+        return changesSinceTree(worktreePath, baselineTree);
       },
       async cleanup() {
         try {
@@ -265,15 +264,22 @@ async function applyDirtyDiff(root, worktreePath, signal) {
   if (!stdout.trim()) return;
   await runProcess("git", ["apply", "--binary", "--whitespace=nowarn"], { cwd: worktreePath, input: stdout, signal });
 }
-async function copyUntracked(root, worktreePath) {
-  const { stdout } = await runProcess("git", ["ls-files", "--others", "--exclude-standard"], { cwd: root });
+async function copyUntracked(root, worktreePath, signal) {
+  const { stdout } = await runProcess("git", ["ls-files", "--others", "--exclude-standard"], { cwd: root, signal });
   for (const rel of stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)) {
-    await copyFilePreservingDirs(path2.join(root, rel), path2.join(worktreePath, rel));
+    throwIfAborted(signal);
+    await copyFilePreservingDirs(path2.join(root, rel), path2.join(worktreePath, rel), signal);
   }
 }
-async function copyArtifactIfNeeded(artifactPath, worktreePath) {
+async function copyArtifactIfNeeded(artifactPath, worktreePath, signal) {
   if (!artifactPath) return;
-  await copyFilePreservingDirs(artifactPath, path2.join(worktreePath, ".council", "artifact.md"));
+  throwIfAborted(signal);
+  await copyFilePreservingDirs(artifactPath, path2.join(worktreePath, ".council", "artifact.md"), signal);
+}
+function throwIfAborted(signal) {
+  if (signal?.aborted) {
+    throw new Error("aborted");
+  }
 }
 async function copyFallback(request, reason) {
   const tmpRoot = await mkdtemp(path2.join(tmpdir(), `council-copy-${safeSegment(request.reviewerId)}-`));
@@ -290,7 +296,7 @@ async function copyFallback(request, reason) {
         return source === request.cwd || !shouldExcludeCopyPath(source);
       }
     });
-    await copyArtifactIfNeeded(request.artifactPath, workspacePath);
+    await copyArtifactIfNeeded(request.artifactPath, workspacePath, request.signal);
   } catch (error) {
     await rm(tmpRoot, { recursive: true, force: true });
     throw error;
@@ -311,18 +317,32 @@ function shouldExcludeCopyPath(source) {
   const base = path2.basename(source);
   return [".git", "node_modules", ".next", "dist", "build", "coverage"].includes(base);
 }
-async function copyFilePreservingDirs(source, destination) {
+async function copyFilePreservingDirs(source, destination, signal) {
   const sourceStat = await stat(source);
   if (sourceStat.isDirectory()) {
-    await cp(source, destination, { recursive: true });
+    await cp(source, destination, {
+      recursive: true,
+      filter: (entry) => {
+        if (signal?.aborted) {
+          throw new Error("aborted");
+        }
+        return entry === source || !shouldExcludeCopyPath(entry);
+      }
+    });
     return;
   }
   await mkdir(path2.dirname(destination), { recursive: true });
   await writeFile(destination, await readFile(source));
 }
-async function porcelainStatus(cwd) {
-  const { stdout } = await runProcess("git", ["status", "--porcelain=v1", "-uall"], { cwd });
-  return stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
+async function snapshotTree(cwd) {
+  await runProcess("git", ["add", "-A"], { cwd });
+  const { stdout } = await runProcess("git", ["write-tree"], { cwd });
+  return stdout.trim();
+}
+async function changesSinceTree(cwd, baselineTree) {
+  await runProcess("git", ["add", "-A"], { cwd });
+  const { stdout } = await runProcess("git", ["diff", "--name-status", baselineTree], { cwd });
+  return stdout.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => line.replace(/\t/g, " ")).join("\n").trim();
 }
 function safeSegment(input) {
   return input.replace(/[^a-zA-Z0-9_.-]/g, "-");

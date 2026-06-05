@@ -14,6 +14,7 @@ export interface ReviewRequest {
   timeoutMs?: number;
   testTimeoutMs?: number;
   author?: ReviewerId;
+  authorSource?: string;
   reviewers?: ReviewerId[];
   allowSandboxedReviewers?: boolean;
   parallelTests?: string;

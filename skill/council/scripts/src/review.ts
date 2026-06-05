@@ -39,7 +39,7 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
     blockingFindings: [],
     suggestions: [],
     questions: [],
-    harnessNotes: [...sandboxHarnessNotes(process.env), ...discovery.warnings],
+    harnessNotes: [authorNote(request), ...sandboxHarnessNotes(process.env), ...discovery.warnings],
     reviewerResults: [],
     nextRoundRecommended: false,
     reviewCommand: request.reviewCommand,
@@ -122,6 +122,14 @@ function reviewerHasEnvAuth(env: NodeJS.ProcessEnv, reviewer: string): boolean {
 
 function sandboxReviewerBlockedNote(): string {
   return "reviewer launch blocked: Council is running inside a Codex sandbox without reviewer-safe auth/network. Rerun the Council helper outside the sandbox. In Codex tool calls, use sandbox_permissions=require_escalated; from a shell, use codex --sandbox danger-full-access or --dangerously-bypass-approvals-and-sandbox only when you understand the risk. --allow-sandboxed-reviewers is an unconditional override; use it only after independently verifying reviewer auth is environment-based and network is available.";
+}
+
+function authorNote(request: ReviewRequest): string {
+  const source = request.authorSource ?? "unspecified";
+  if (request.author) {
+    return `authoring agent: ${request.author} (${source}); excluded from reviewers to prevent self-review`;
+  }
+  return `authoring agent: none (${source}); no reviewer auto-excluded — pass --author to guarantee no self-review`;
 }
 
 export function sandboxHarnessNotes(env: NodeJS.ProcessEnv): string[] {

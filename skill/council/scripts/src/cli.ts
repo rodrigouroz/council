@@ -89,10 +89,41 @@ export function parseArgs(args: string[], env: NodeJS.ProcessEnv = processEnv): 
     }
   }
 
-  request.author ??= parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
+  const resolved = resolveAuthor(request.author, env);
+  request.author = resolved.author;
+  request.authorSource = resolved.source;
   request.reviewCommand = commandLine(args);
   validateRequest(request);
   return request;
+}
+
+export interface ResolvedAuthor {
+  author?: ReviewerId;
+  source: string;
+}
+
+/**
+ * Resolve the authoring agent so Council never reviews itself, regardless of
+ * caller. Precedence: explicit --author flag > COUNCIL_AUTHOR_AGENT > env
+ * auto-detect. Auto-detect is deterministic when markers collide: the codex CLI
+ * exports CODEX_SANDBOX for its own child process tree, so a helper launched
+ * under codex can see both CODEX_SANDBOX and CLAUDECODE; CODEX_SANDBOX wins.
+ */
+export function resolveAuthor(flagAuthor: ReviewerId | undefined, env: NodeJS.ProcessEnv): ResolvedAuthor {
+  if (flagAuthor) {
+    return { author: flagAuthor, source: "--author flag" };
+  }
+  const envAuthor = parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
+  if (envAuthor) {
+    return { author: envAuthor, source: "COUNCIL_AUTHOR_AGENT" };
+  }
+  if (env.CODEX_SANDBOX) {
+    return { author: "codex", source: "auto-detected from CODEX_SANDBOX" };
+  }
+  if (env.CLAUDECODE === "1" || env.CLAUDE_CODE_ENTRYPOINT) {
+    return { author: "claude", source: "auto-detected from CLAUDECODE" };
+  }
+  return { author: undefined, source: "no authoring agent detected" };
 }
 
 export async function runCli(args: string[]): Promise<string> {

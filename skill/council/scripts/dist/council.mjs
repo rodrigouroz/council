@@ -329,7 +329,7 @@ async function runReview(request) {
     blockingFindings: [],
     suggestions: [],
     questions: [],
-    harnessNotes: [...sandboxHarnessNotes(process.env), ...discovery.warnings],
+    harnessNotes: [authorNote(request), ...sandboxHarnessNotes(process.env), ...discovery.warnings],
     reviewerResults: [],
     nextRoundRecommended: false,
     reviewCommand: request.reviewCommand
@@ -398,6 +398,13 @@ function reviewerHasEnvAuth(env, reviewer) {
 }
 function sandboxReviewerBlockedNote() {
   return "reviewer launch blocked: Council is running inside a Codex sandbox without reviewer-safe auth/network. Rerun the Council helper outside the sandbox. In Codex tool calls, use sandbox_permissions=require_escalated; from a shell, use codex --sandbox danger-full-access or --dangerously-bypass-approvals-and-sandbox only when you understand the risk. --allow-sandboxed-reviewers is an unconditional override; use it only after independently verifying reviewer auth is environment-based and network is available.";
+}
+function authorNote(request) {
+  const source = request.authorSource ?? "unspecified";
+  if (request.author) {
+    return `authoring agent: ${request.author} (${source}); excluded from reviewers to prevent self-review`;
+  }
+  return `authoring agent: none (${source}); no reviewer auto-excluded \u2014 pass --author to guarantee no self-review`;
 }
 function sandboxHarnessNotes(env) {
   const sandbox = env.CODEX_SANDBOX;
@@ -793,10 +800,28 @@ function parseArgs(args, env = processEnv) {
         throw new Error(`unexpected positional argument: ${arg}`);
     }
   }
-  request.author ??= parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
+  const resolved = resolveAuthor(request.author, env);
+  request.author = resolved.author;
+  request.authorSource = resolved.source;
   request.reviewCommand = commandLine(args);
   validateRequest(request);
   return request;
+}
+function resolveAuthor(flagAuthor, env) {
+  if (flagAuthor) {
+    return { author: flagAuthor, source: "--author flag" };
+  }
+  const envAuthor = parseAuthor(env.COUNCIL_AUTHOR_AGENT, "COUNCIL_AUTHOR_AGENT");
+  if (envAuthor) {
+    return { author: envAuthor, source: "COUNCIL_AUTHOR_AGENT" };
+  }
+  if (env.CODEX_SANDBOX) {
+    return { author: "codex", source: "auto-detected from CODEX_SANDBOX" };
+  }
+  if (env.CLAUDECODE === "1" || env.CLAUDE_CODE_ENTRYPOINT) {
+    return { author: "claude", source: "auto-detected from CLAUDECODE" };
+  }
+  return { author: void 0, source: "no authoring agent detected" };
 }
 async function runCli(args) {
   const request = parseArgs(args);

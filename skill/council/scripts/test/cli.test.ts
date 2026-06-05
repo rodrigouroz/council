@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { parseArgs } from "../src/cli.ts";
+import { parseArgs, resolveAuthor } from "../src/cli.ts";
 
 test("parseArgs requires artifact or diff", () => {
   assert.throws(
@@ -121,6 +121,42 @@ test("parseArgs rejects invalid timeout", () => {
 test("parseArgs reads author from environment when flag is omitted", () => {
   const parsed = parseArgs(["review", "--diff"], { COUNCIL_AUTHOR_AGENT: "claude" });
   assert.equal(parsed.author, "claude");
+  assert.equal(parsed.authorSource, "COUNCIL_AUTHOR_AGENT");
+});
+
+test("resolveAuthor prefers the explicit flag over everything", () => {
+  const resolved = resolveAuthor("claude", { COUNCIL_AUTHOR_AGENT: "codex", CODEX_SANDBOX: "seatbelt" });
+  assert.equal(resolved.author, "claude");
+  assert.equal(resolved.source, "--author flag");
+});
+
+test("resolveAuthor falls back to COUNCIL_AUTHOR_AGENT", () => {
+  const resolved = resolveAuthor(undefined, { COUNCIL_AUTHOR_AGENT: "codex" });
+  assert.equal(resolved.author, "codex");
+  assert.equal(resolved.source, "COUNCIL_AUTHOR_AGENT");
+});
+
+test("resolveAuthor auto-detects claude from CLAUDECODE", () => {
+  const resolved = resolveAuthor(undefined, { CLAUDECODE: "1" });
+  assert.equal(resolved.author, "claude");
+  assert.match(resolved.source, /CLAUDECODE/);
+});
+
+test("resolveAuthor auto-detects codex from CODEX_SANDBOX", () => {
+  const resolved = resolveAuthor(undefined, { CODEX_SANDBOX: "seatbelt" });
+  assert.equal(resolved.author, "codex");
+  assert.match(resolved.source, /CODEX_SANDBOX/);
+});
+
+test("resolveAuthor resolves codex deterministically when both markers are present", () => {
+  const resolved = resolveAuthor(undefined, { CLAUDECODE: "1", CODEX_SANDBOX: "seatbelt" });
+  assert.equal(resolved.author, "codex");
+});
+
+test("resolveAuthor leaves author undefined when no marker is present", () => {
+  const resolved = resolveAuthor(undefined, {});
+  assert.equal(resolved.author, undefined);
+  assert.match(resolved.source, /no authoring agent detected/);
 });
 
 test("parseArgs trims author values", () => {

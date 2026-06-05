@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -98,13 +98,16 @@ test("prepared workspace reports a genuine reviewer mutation on top of the basel
   }
 });
 
-test("prepareWorkspace propagates an aborted signal instead of an unbounded copy fallback", async () => {
+test("prepareWorkspace propagates an aborted signal and cleans up the partial copy fallback", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "council-abort-fallback-"));
   await writeFile(path.join(dir, "source.txt"), "source\n");
   const controller = new AbortController();
   controller.abort();
 
+  const before = (await readdir(tmpdir())).filter((entry) => entry.startsWith("council-copy-")).length;
   await assert.rejects(() => prepareWorkspace({ cwd: dir, reviewerId: "codex", signal: controller.signal }));
+  const after = (await readdir(tmpdir())).filter((entry) => entry.startsWith("council-copy-")).length;
+  assert.equal(after, before);
 });
 
 test("prepareWorkspace copy fallback copies source files and excludes generated directories", async () => {

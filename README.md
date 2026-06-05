@@ -42,7 +42,7 @@ If Git worktrees are unavailable, Council falls back to a temporary directory co
 
 Council is not an OS sandbox. Reviewer CLIs still run as local processes with their own permission modes, so avoid putting absolute paths to the author's source checkout in prompts or artifacts when reviewer tools are broadly permitted.
 
-When Council is launched from a sandboxed Codex shell, reviewer CLIs may be unable to access their auth/session files or the network. Council blocks reviewer launch when it detects an unsafe sandboxed reviewer environment. In Codex tool calls, the agent should request `sandbox_permissions: "require_escalated"` for the Council helper command. From a human shell, start Codex with `codex --sandbox danger-full-access` when you intentionally want reviewer CLIs to run outside the sandbox; `--dangerously-bypass-approvals-and-sandbox` is broader and should only be used when you understand the risk. `--allow-sandboxed-reviewers` is an unconditional override; use it only when you have independently verified that reviewer auth is environment-based and network is available.
+When Council is launched from a sandboxed Codex shell, reviewer CLIs run as local child processes that need their normal auth/home state and network. Council blocks reviewer launch only when the sandbox has disabled network (`CODEX_SANDBOX_NETWORK_DISABLED`), since reviewers cannot reach their model backends without it; when network is available reviewers launch and any auth failure surfaces as a reviewer error rather than being guessed from environment variables. In Codex tool calls, the agent should request `sandbox_permissions: "require_escalated"` for the Council helper command. From a human shell, start Codex with `codex --sandbox danger-full-access` when you intentionally want reviewer CLIs to run outside the sandbox; `--dangerously-bypass-approvals-and-sandbox` is broader and should only be used when you understand the risk. `--allow-sandboxed-reviewers` is an unconditional override.
 
 If a report says `no reviewer agents available`, treat the artifact as unreviewed. Install the opposite reviewer CLI, correct the author value, or use the manual fallback instructions in `references/council-workflow.md`.
 
@@ -93,7 +93,7 @@ node skill/council/scripts/dist/council.mjs review \
 
 `--commit` reviews the diff emitted by `git show --format= --binary <ref>`. Merge commits may produce no diff with that command shape; review the branch/base range instead when merge-commit content matters.
 
-Limit or expand the reviewer panel:
+Limit the reviewer set (unavailable or author-matching reviewers are still skipped with a visible warning):
 
 ```bash
 node skill/council/scripts/dist/council.mjs review \
@@ -102,13 +102,6 @@ node skill/council/scripts/dist/council.mjs review \
   --reviewers claude \
   --cwd /path/to/repo \
   --author codex
-
-node skill/council/scripts/dist/council.mjs review \
-  --mode branch \
-  --base origin/main \
-  --panel \
-  --cwd /path/to/repo \
-  --author <codex-or-claude>
 ```
 
 Run a verification command in parallel with reviewer agents and include its proof in the report:

@@ -278,18 +278,23 @@ async function copyArtifactIfNeeded(artifactPath, worktreePath) {
 async function copyFallback(request, reason) {
   const tmpRoot = await mkdtemp(path2.join(tmpdir(), `council-copy-${safeSegment(request.reviewerId)}-`));
   const workspacePath = path2.join(tmpRoot, "repo");
-  await cp(request.cwd, workspacePath, {
-    recursive: true,
-    // cp has no AbortSignal option, so bound the copy through the per-entry
-    // filter: once the run deadline aborts, the next entry throws and cp stops.
-    filter: (source) => {
-      if (request.signal?.aborted) {
-        throw new Error("aborted");
+  try {
+    await cp(request.cwd, workspacePath, {
+      recursive: true,
+      // cp has no AbortSignal option, so bound the copy through the per-entry
+      // filter: once the run deadline aborts, the next entry throws and cp stops.
+      filter: (source) => {
+        if (request.signal?.aborted) {
+          throw new Error("aborted");
+        }
+        return source === request.cwd || !shouldExcludeCopyPath(source);
       }
-      return source === request.cwd || !shouldExcludeCopyPath(source);
-    }
-  });
-  await copyArtifactIfNeeded(request.artifactPath, workspacePath);
+    });
+    await copyArtifactIfNeeded(request.artifactPath, workspacePath);
+  } catch (error) {
+    await rm(tmpRoot, { recursive: true, force: true });
+    throw error;
+  }
   return {
     path: workspacePath,
     fallback: true,

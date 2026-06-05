@@ -98,6 +98,15 @@ test("prepared workspace reports a genuine reviewer mutation on top of the basel
   }
 });
 
+test("prepareWorkspace propagates an aborted signal instead of an unbounded copy fallback", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "council-abort-fallback-"));
+  await writeFile(path.join(dir, "source.txt"), "source\n");
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(() => prepareWorkspace({ cwd: dir, reviewerId: "codex", signal: controller.signal }));
+});
+
 test("prepareWorkspace copy fallback copies source files and excludes generated directories", async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "council-copy-source-"));
   await writeFile(path.join(dir, "source.txt"), "source\n");

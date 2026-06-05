@@ -114,14 +114,14 @@ Defaults:
 - `--reviewers codex,claude` limits the reviewer set; unavailable or author-matching reviewers are still skipped with visible warnings.
 - `--parallel-tests "<command>"` starts a verification command alongside reviewer agents and records the command, status, and compact output proof in the report.
 - `--test-timeout-ms <milliseconds>` controls the parallel test command timeout. If omitted, parallel tests use `--timeout-ms`.
-- `--allow-sandboxed-reviewers` unconditionally permits reviewer launch inside a Codex sandbox; use it only after independently verifying reviewer auth is environment-based and network is available.
+- `--allow-sandboxed-reviewers` unconditionally permits reviewer launch inside a Codex sandbox, bypassing the network-disabled guard; use it only after independently verifying reviewers can reach their backends.
 - Output defaults to Markdown.
 - `--json` emits JSON.
 - Report `result` values are `no blocking findings`, `next round recommended`, `no reviewer agents available`, and `review incomplete`.
 
 The helper should avoid user-facing review modes such as `artifact-only`, `read-only`, or `verify`. Reviewers get a simple instruction: use the tools needed to review well, but do not intentionally modify source. The harness isolates ordinary cwd-relative writes through disposable workspaces and reports mutations it observes.
 
-When the helper detects `CODEX_SANDBOX`, it should not launch reviewer CLIs if network is disabled or if selected reviewers appear to depend on home-directory auth. It should return `review incomplete`, keep parallel test proof when requested, and tell Codex agents to rerun the helper with escalated sandbox permissions. If reviewer auth is environment-based and network is available, reviewer launch is permitted. `--allow-sandboxed-reviewers` bypasses this guard unconditionally and is intended only for users who have independently verified the sandboxed reviewer environment.
+When the helper detects `CODEX_SANDBOX`, it should block reviewer launch only when it observes that the sandbox has disabled network (`CODEX_SANDBOX_NETWORK_DISABLED`), because reviewer CLIs then cannot reach their model backends. It should not infer reviewer usability from API-key environment variables: reviewer auth is commonly OAuth/subscription state in the home directory, so an API-key check wrongly blocks the common case. When network is available the helper launches reviewers and surfaces any auth failure as a reviewer error. When it does block, it returns `review incomplete`, keeps parallel test proof when requested, and tells Codex agents to rerun the helper with escalated sandbox permissions. `--allow-sandboxed-reviewers` bypasses this guard unconditionally.
 
 ## Reviewer Agents
 

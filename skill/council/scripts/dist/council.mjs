@@ -238,6 +238,9 @@ async function prepareWorkspace(request) {
     };
   } catch (error) {
     await rm(tmpRoot, { recursive: true, force: true });
+    if (signal?.aborted) {
+      throw error;
+    }
     return copyFallback(request, `git worktree setup failed: ${error.message}`);
   }
 }
@@ -277,7 +280,14 @@ async function copyFallback(request, reason) {
   const workspacePath = path2.join(tmpRoot, "repo");
   await cp(request.cwd, workspacePath, {
     recursive: true,
-    filter: (source) => source === request.cwd || !shouldExcludeCopyPath(source)
+    // cp has no AbortSignal option, so bound the copy through the per-entry
+    // filter: once the run deadline aborts, the next entry throws and cp stops.
+    filter: (source) => {
+      if (request.signal?.aborted) {
+        throw new Error("aborted");
+      }
+      return source === request.cwd || !shouldExcludeCopyPath(source);
+    }
   });
   await copyArtifactIfNeeded(request.artifactPath, workspacePath);
   return {

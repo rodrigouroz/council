@@ -54,6 +54,11 @@ export async function prepareWorkspace(request: PrepareWorkspaceRequest): Promis
     };
   } catch (error) {
     await rm(tmpRoot, { recursive: true, force: true });
+    // A deadline abort during setup must not be masked by an unbounded
+    // directory-copy fallback; propagate it so the run is recorded as cancelled.
+    if (signal?.aborted) {
+      throw error;
+    }
     return copyFallback(request, `git worktree setup failed: ${(error as Error).message}`);
   }
 }
@@ -99,7 +104,14 @@ async function copyFallback(request: PrepareWorkspaceRequest, reason: string): P
   const workspacePath = path.join(tmpRoot, "repo");
   await cp(request.cwd, workspacePath, {
     recursive: true,
-    filter: (source) => source === request.cwd || !shouldExcludeCopyPath(source),
+    // cp has no AbortSignal option, so bound the copy through the per-entry
+    // filter: once the run deadline aborts, the next entry throws and cp stops.
+    filter: (source) => {
+      if (request.signal?.aborted) {
+        throw new Error("aborted");
+      }
+      return source === request.cwd || !shouldExcludeCopyPath(source);
+    },
   });
   await copyArtifactIfNeeded(request.artifactPath, workspacePath);
   return {

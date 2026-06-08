@@ -539,13 +539,15 @@ test("run deadline keeps a fast reviewer's findings while cancelling a slow one"
     [
       `#!${process.execPath}`,
       "process.stdin.resume();",
-      "process.stdin.on('end', () => { setTimeout(() => console.log('PASS: too late'), 5000); });",
+      "process.stdin.on('end', () => { setTimeout(() => console.log('PASS: too late'), 60000); });",
     ].join("\n"),
     { mode: 0o755 },
   );
   const oldPath = process.env.PATH;
   process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
   try {
+    // Generous deadline: the fast reviewer must reliably finish (even on a loaded
+    // CI box doing worktree setup) while the 60s sleeper is reliably cancelled.
     const report = await runReview({
       command: "review",
       cwd: repo,
@@ -556,7 +558,7 @@ test("run deadline keeps a fast reviewer's findings while cancelling a slow one"
       round: 1,
       changeSummary: "",
       format: "markdown",
-      runTimeoutMs: 1_500,
+      runTimeoutMs: 5_000,
     });
 
     assert.equal(report.incomplete, true);

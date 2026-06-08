@@ -98,6 +98,21 @@ test("prepared workspace reports a genuine reviewer mutation on top of the basel
   }
 });
 
+test("prepared workspace keeps the author's change visible to a reviewer's git diff", async () => {
+  const repo = await initRepo();
+  await writeFile(path.join(repo, "tracked.txt"), "dirty change\n");
+
+  const prepared = await prepareWorkspace({ cwd: repo, reviewerId: "codex" });
+  try {
+    // The baseline snapshot must not stage into the real index: a reviewer
+    // running `git diff` in the workspace should still see the dirty change.
+    const unstaged = await git(prepared.path, ["diff", "--name-only"]);
+    assert.match(unstaged, /tracked\.txt/);
+  } finally {
+    await prepared.cleanup();
+  }
+});
+
 test("prepared workspace reports a reviewer edit to an already-dirty file", async () => {
   const repo = await initRepo();
   await writeFile(path.join(repo, "tracked.txt"), "dirty change\n");

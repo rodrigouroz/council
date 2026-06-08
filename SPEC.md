@@ -284,11 +284,13 @@ JSON output should contain the same data shape:
   "maxRounds": 3,
   "artifact": "...",
   "reviewers": [],
-  "result": "no blocking findings | next round recommended | no reviewer agents available",
+  "result": "no blocking findings | next round recommended | no reviewer agents available | review incomplete",
   "blockingFindings": [],
   "suggestions": [],
   "questions": [],
   "harnessNotes": [],
+  "incomplete": false,
+  "incompleteReasons": [],
   "nextRoundRecommended": false
 }
 ```

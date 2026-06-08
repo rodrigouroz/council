@@ -37,12 +37,17 @@ export async function prepareWorkspace(request: PrepareWorkspaceRequest): Promis
     // untracked files, .council/artifact.md) as a git tree, so status() reports
     // any reviewer change on top of it — including further edits to files that
     // were already dirty or untracked, which a status-line baseline would hide.
-    const baselineTree = await snapshotTree(worktreePath, signal);
+    // Snapshot through throwaway index files (siblings of the worktree, removed
+    // with tmpRoot) so the reviewer's real index is never staged — a reviewer
+    // inspecting the workspace must still see the author's changes via git diff.
+    const baselineIndex = path.join(tmpRoot, "baseline.index");
+    const statusIndex = path.join(tmpRoot, "status.index");
+    const baselineTree = await snapshotTree(worktreePath, baselineIndex, signal);
     return {
       path: worktreePath,
       fallback: false,
       async status() {
-        return changesSinceTree(worktreePath, baselineTree, signal);
+        return changesSinceTree(worktreePath, baselineTree, statusIndex, signal);
       },
       async cleanup() {
         try {
@@ -168,17 +173,25 @@ async function copyFilePreservingDirs(source: string, destination: string, signa
   await writeFile(destination, await readFile(source));
 }
 
-// Stage the current worktree and capture its tree object, so later changes can
-// be diffed against this exact content (not just git status-line categories).
-async function snapshotTree(cwd: string, signal?: AbortSignal): Promise<string> {
-  await runProcess("git", ["add", "-A"], { cwd, signal });
-  const { stdout } = await runProcess("git", ["write-tree"], { cwd, signal });
+// Capture the current worktree content as a git tree, using a throwaway index
+// so the reviewer's real index stays untouched. Comparing against this tree
+// later detects any content change, not just git status-line categories.
+async function snapshotTree(cwd: string, indexFile: string, signal?: AbortSignal): Promise<string> {
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  await runProcess("git", ["add", "-A"], { cwd, env, signal });
+  const { stdout } = await runProcess("git", ["write-tree"], { cwd, env, signal });
   return stdout.trim();
 }
 
-async function changesSinceTree(cwd: string, baselineTree: string, signal?: AbortSignal): Promise<string> {
-  await runProcess("git", ["add", "-A"], { cwd, signal });
-  const { stdout } = await runProcess("git", ["diff", "--name-status", baselineTree], { cwd, signal });
+async function changesSinceTree(
+  cwd: string,
+  baselineTree: string,
+  indexFile: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  await runProcess("git", ["add", "-A"], { cwd, env, signal });
+  const { stdout } = await runProcess("git", ["diff", "--cached", "--name-status", baselineTree], { cwd, env, signal });
   return stdout
     .split(/\r?\n/)
     .filter((line) => line.trim().length > 0)

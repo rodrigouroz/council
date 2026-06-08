@@ -220,12 +220,14 @@ async function prepareWorkspace(request) {
     await applyDirtyDiff(root, worktreePath, signal);
     await copyUntracked(root, worktreePath, signal);
     await copyArtifactIfNeeded(request.artifactPath, worktreePath, signal);
-    const baselineTree = await snapshotTree(worktreePath, signal);
+    const baselineIndex = path2.join(tmpRoot, "baseline.index");
+    const statusIndex = path2.join(tmpRoot, "status.index");
+    const baselineTree = await snapshotTree(worktreePath, baselineIndex, signal);
     return {
       path: worktreePath,
       fallback: false,
       async status() {
-        return changesSinceTree(worktreePath, baselineTree, signal);
+        return changesSinceTree(worktreePath, baselineTree, statusIndex, signal);
       },
       async cleanup() {
         try {
@@ -334,14 +336,16 @@ async function copyFilePreservingDirs(source, destination, signal) {
   await mkdir(path2.dirname(destination), { recursive: true });
   await writeFile(destination, await readFile(source));
 }
-async function snapshotTree(cwd, signal) {
-  await runProcess("git", ["add", "-A"], { cwd, signal });
-  const { stdout } = await runProcess("git", ["write-tree"], { cwd, signal });
+async function snapshotTree(cwd, indexFile, signal) {
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  await runProcess("git", ["add", "-A"], { cwd, env, signal });
+  const { stdout } = await runProcess("git", ["write-tree"], { cwd, env, signal });
   return stdout.trim();
 }
-async function changesSinceTree(cwd, baselineTree, signal) {
-  await runProcess("git", ["add", "-A"], { cwd, signal });
-  const { stdout } = await runProcess("git", ["diff", "--name-status", baselineTree], { cwd, signal });
+async function changesSinceTree(cwd, baselineTree, indexFile, signal) {
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  await runProcess("git", ["add", "-A"], { cwd, env, signal });
+  const { stdout } = await runProcess("git", ["diff", "--cached", "--name-status", baselineTree], { cwd, env, signal });
   return stdout.split(/\r?\n/).filter((line) => line.trim().length > 0).map((line) => line.replace(/\t/g, " ")).join("\n").trim();
 }
 function safeSegment(input) {

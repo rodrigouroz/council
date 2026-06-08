@@ -41,17 +41,23 @@ export async function runReview(request: ReviewRequest): Promise<CouncilReport> 
   }, request.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS);
   runTimer.unref();
   try {
-    return await runReviewInner(request, runController.signal, () => runTimedOut);
+    const report = await runReviewInner(request, runController.signal);
+    // Centralized here so every return path in runReviewInner — including the
+    // early no-diff, sandbox-blocked, and no-reviewer exits — reflects a run
+    // deadline that fired during diff reads, workspace setup, or parallel tests.
+    if (runTimedOut) {
+      report.harnessNotes.push(
+        `run timed out after ${request.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS}ms; outstanding reviewers/tests were cancelled and any completed results are kept`,
+      );
+      markIncomplete(report, "run timed out");
+    }
+    return report;
   } finally {
     clearTimeout(runTimer);
   }
 }
 
-async function runReviewInner(
-  request: ReviewRequest,
-  signal: AbortSignal,
-  timedOut: () => boolean,
-): Promise<CouncilReport> {
+async function runReviewInner(request: ReviewRequest, signal: AbortSignal): Promise<CouncilReport> {
   const discovery = discoverReviewers(process.env, request.author, request.reviewers);
   const report: CouncilReport = {
     round: request.round,
@@ -101,12 +107,6 @@ async function runReviewInner(
     testProofPromise,
   ]);
   report.testProof = testProof;
-  if (timedOut()) {
-    report.harnessNotes.push(
-      `run timed out after ${request.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS}ms; outstanding reviewers/tests were cancelled and any completed results are kept`,
-    );
-    markIncomplete(report, "run timed out");
-  }
   for (const [index, result] of reviewerResults.entries()) {
     const reviewer = discovery.reviewers[index]!;
     report.reviewerResults.push(result);

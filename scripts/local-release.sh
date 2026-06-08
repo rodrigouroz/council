@@ -79,21 +79,16 @@ echo
 echo "Built $zip_path"
 
 if [[ "${#install_targets[@]}" -gt 0 ]]; then
-  deduped_targets=()
+  # Dedup via a string membership test rather than an array, so this stays safe
+  # under `set -u` on bash 3.2 (macOS), where expanding an empty array with [@]
+  # raises "unbound variable".
+  seen_targets=" "
   for target in "${install_targets[@]}"; do
-    already_seen=false
-    for existing in "${deduped_targets[@]}"; do
-      if [[ "$existing" == "$target" ]]; then
-        already_seen=true
-        break
-      fi
-    done
-    if [[ "$already_seen" == false ]]; then
-      deduped_targets+=("$target")
+    if [[ "$seen_targets" == *" $target "* ]]; then
+      continue
     fi
-  done
+    seen_targets="$seen_targets$target "
 
-  for target in "${deduped_targets[@]}"; do
     case "$target" in
       codex)
         skills_dir="${CODEX_HOME:-$HOME/.codex}/skills"
